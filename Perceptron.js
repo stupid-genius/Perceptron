@@ -1,6 +1,5 @@
 const Logger = require('log-ng');
 const path = require('node:path');
-// const Matrix = require('./Matrix.js');
 
 const logger = new Logger(path.basename(__filename));
 
@@ -26,10 +25,11 @@ function Perceptron(){
 	}
 
 	const inputs = [];
+	const outputs = [];
 	const weights = Array(3).fill(0).map(() => Math.random() * 2 - 1);
 	const gradients = Array(weights.length).fill(0);
-	let activationFn = (x) => x; // identity by default
-	let lossFn = (yPred, yTarget) => 0.5 * Math.pow(yPred - yTarget, 2); // MSE by default
+	let activationFn = (x) => x;
+	// let lossFn = (yPred, yTarget) => 0.5 * Math.pow(yPred - yTarget, 2); // MSE by default
 
 	Object.defineProperties(this, {
 		activation: {
@@ -41,7 +41,7 @@ function Perceptron(){
 		backward: {
 			// hardcoded gradient for now
 			value: function(yTarget){
-				const yPred = this.forward(inputs[0], inputs[1]);
+				const yPred = outputs[0];
 
 				const dLoss_dYPred = yPred - yTarget; // d(MSE)/d(yPred)
 				const dYPred_dSum = 1; // derivative of activation (identity) is 1
@@ -50,7 +50,8 @@ function Perceptron(){
 				const newGradients = weights.map((_, i) => dLoss_dYPred * dYPred_dSum * dSum_dWeights[i]);
 
 				for(let i = 0; i < weights.length; ++i){
-					gradients[i] = newGradients[i];
+					gradients[i] += newGradients[i];
+					logger.debug(`Gradient for weight[${i}]: ${gradients[i]}`);
 				}
 
 				return this;
@@ -66,7 +67,9 @@ function Perceptron(){
 					sum += inputs[i] * weights[i];
 				}
 
-				return activationFn(sum);
+				const output = activationFn(sum);
+				outputs[0] = output;
+				return output;
 			}
 		},
 		loss: {
@@ -81,12 +84,17 @@ function Perceptron(){
 			value: function(learningRate){
 				for(let i = 0; i < weights.length; ++i){
 					weights[i] -= learningRate * gradients[i];
+					gradients[i] = 0;
 				}
 				return this;
 			}
 		},
 		weights: {
 			value: function(){
+				if(arguments.length === 0){
+					return weights.slice();
+				}
+
 				for(let i = 0; i < arguments.length; ++i){
 					weights[i] = arguments[i];
 				}
