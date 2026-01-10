@@ -1,7 +1,7 @@
 const Logger = require('log-ng');
 const path = require('path');
 
-Logger({logLevel: 'info', logFile: 'mochaTest.log'});
+Logger({logLevel: 'warn', logFile: 'mochaTest.log'});
 const logger = new Logger(path.basename(__filename));
 
 const app = require('./testServer.js');
