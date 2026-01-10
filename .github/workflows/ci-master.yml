@@ -1,0 +1,31 @@
+name: CI - master
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  ci-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Cache node_modules
+        uses: actions/cache@v3
+        id: tests
+        env:
+          cache-name: tests
+        with:
+          path: ./node_modules/
+          key: tests-${{ hashFiles('./package-lock.json') }}
+          restore-keys: tests-${{ hashFiles('./package-lock.json') }}
+        timeout-minutes: 4
+      - name: Install dependencies
+        if: steps.tests.outputs.cache-hit != true
+        run: npm ci
+      - name: Run tests
+        run: npm test

@@ -1,0 +1,31 @@
+{
+  "name": "karmatester",
+  "version": "1.2.0",
+  "description": "A simple, re-usable test harness for prototyping",
+  "main": "index.js",
+  "scripts": {
+    "cleanlog": "rm *.log.gz *.log 2> /dev/null || :",
+    "createCert": "openssl req -new -x509 -newkey rsa:4096 -keyout key.pem -nodes -out cert.pem <<END\nUS\nColorado\nBoulder\nStupid Genius Software\nlocalhost\n\n\nEND",
+    "karma": "karma start",
+    "mocha": "mocha --require test.js server.spec.js",
+    "start": "npx http-server -S -C cert.pem -K key.pem -p 9876 -c-1",
+    "test": "npm run mocha; npm run karma",
+    "testServer": "node testServer.js"
+  },
+  "author": "Stupid Genius Software",
+  "license": "GPL-3.0",
+  "devDependencies": {
+    "chai": "4.3.10",
+    "cors": "^2.8.5",
+    "esbuild": "^0.19.11",
+    "express": "^4.18.2",
+    "karma": "^6.4.2",
+    "karma-chrome-launcher": "^3.2.0",
+    "karma-esbuild": "^2.3.0",
+    "karma-firefox-launcher": "^2.1.2",
+    "karma-mocha": "^2.0.1",
+    "karma-mocha-reporter": "^2.2.5",
+    "log-ng": "github:stupid-genius/log-ng",
+    "mocha": "^10.2.0"
+  }
+}
