@@ -2,6 +2,7 @@ const {assert} = require('chai');
 const Logger = require('log-ng');
 const path = require('node:path');
 const generateData = require('./datagen.js');
+const DualNumber = require('./Dual.js');
 const Matrix = require('./Matrix.js');
 const Perceptron = require('./Perceptron.js');
 
@@ -143,6 +144,100 @@ describe('Matrix', function(){
 		assert.equal(C.dimensions[0], size);
 		assert.equal(C.dimensions[1], size);
 		assert.equal(C[0][0], size);
+	});
+});
+
+const testScale = 100;
+describe('DualNumber', function(){
+	it('should perform addition correctly', function(){
+		for(let a = -testScale; a <= testScale; ++a){
+			for(let b = -testScale; b <= testScale; b += 10){
+				const dn1 = DualNumber(a, 1);
+				const dn2 = DualNumber(b, 0);
+				const dn3 = dn1.add(dn2);
+				const dn4 = Math.ceil(Math.random() * testScale);
+
+				assert.equal(dn3.real, a + b);
+				assert.equal(dn3.dual, 1);
+				assert.equal(dn1.add(dn2).add(dn4).real, a + b + dn4);
+			}
+		}
+	});
+
+	it('should perform subtraction correctly', function(){
+		for(let a = -testScale; a <= testScale; ++a){
+			for(let b = -testScale; b <= testScale; b += 10){
+				const dn1 = DualNumber(a, 1);
+				const dn2 = DualNumber(b, 0);
+				const dn3 = dn1.sub(dn2);
+				const dn4 = Math.ceil(Math.random() * testScale);
+
+				assert.equal(dn3.real, a - b);
+				assert.equal(dn3.dual, 1);
+				assert.equal(dn1.sub(dn2).sub(dn4).real, a - b - dn4);
+			}
+		}
+	});
+
+	it('should perform multiplication correctly', function(){
+		for(let a = -testScale; a <= testScale; a += 5){
+			for(let b = -testScale; b <= testScale; b += 10){
+				const dn1 = DualNumber(a, 1);
+				const dn2 = DualNumber(b, 0);
+				const dn3 = dn1.mul(dn2);
+				const dn4 = Math.ceil(Math.random() * testScale);
+
+				assert.equal(dn3.real, a * b);
+				assert.equal(dn3.dual, b);
+				assert.equal(dn1.mul(dn2).mul(dn4).real, a * b * dn4);
+			}
+		}
+	});
+
+	it('should perform division correctly', function(){
+		for(let a = -testScale; a <= testScale; a += 5){
+			for(let b = -testScale; b <= testScale; b += 10){
+				if(b === 0) continue;
+				const dn1 = DualNumber(a, 1);
+				const dn2 = DualNumber(b, 0);
+				const dn3 = dn1.div(dn2);
+				const dn4 = Math.ceil(Math.random() * testScale);
+
+				assert.equal(dn3.real, a / b);
+				assert.equal(dn3.dual, 1 / b);
+				assert.equal(dn1.div(dn2).div(dn4).real, (a / b) / dn4);
+			}
+		}
+	});
+
+	it('should compute derivatives via dual part', function(){
+		for(let x = -testScale; x <= testScale; x += 5){
+			const dn = DualNumber(x, 1);
+
+			// Test f(x) = x^2
+			const f1 = dn.mul(dn);
+			assert.equal(f1.real, x * x);
+			assert.equal(f1.dual, 2 * x);
+
+			// Test f(x) = x^3 + 2x + 1
+			const f2 = dn.mul(dn).mul(dn).add(dn.mul(2)).add(1);
+			assert.equal(f2.real, x * x * x + 2 * x + 1);
+			assert.equal(f2.dual, 3 * x * x + 2);
+		}
+	});
+
+	it('should compute gradients via backward propagation', function(){
+		for(let x = -testScale; x <= testScale; x += 5){
+			const dn = DualNumber(x, 0);
+
+			// Define f(x) = x^2
+			const f = dn.mul(dn);
+
+			f.backprop();
+
+			assert.equal(f.real, x * x);
+			assert.equal(dn.grad, 2 * x);
+		}
 	});
 });
 

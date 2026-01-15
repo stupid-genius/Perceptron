@@ -1,5 +1,7 @@
 const Logger = require('log-ng');
 const path = require('node:path');
+// const DualNumber = require('./Dual.js');
+// const Matrix = require('./Matrix.js');
 
 const logger = new Logger(path.basename(__filename));
 
@@ -73,8 +75,7 @@ function Perceptron(){
 			}
 		},
 		loss: {
-			// what a beast; just hardcoding for now
-			// will likely need to integrate a CAS to make this actually work
+			// need to use auto-diff to compute gradients properly
 			value: function(fn){
 				lossFn = fn;
 				return this;
