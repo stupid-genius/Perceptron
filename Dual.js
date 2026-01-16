@@ -120,5 +120,11 @@ function DualNumber(real = 0, dual = 0){
 	});
 }
 
+// function DualMatrix(){
+// 	if(!new.target){
+// 		return new DualMatrix(...arguments);
+// 	}
+// }
+
 module.exports = DualNumber;
 
