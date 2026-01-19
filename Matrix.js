@@ -1,5 +1,6 @@
 const Logger = require('log-ng');
 const path = require('node:path');
+const DualNumber = require('./Dual.js');
 
 const logger = new Logger(path.basename(__filename));
 
@@ -303,7 +304,6 @@ function Matrix(m, n, dataArray){
 
 	return indexable;
 }
-
 Object.defineProperties(Matrix, {
 	identity: {
 		value: function(size){
@@ -315,5 +315,29 @@ Object.defineProperties(Matrix, {
 		}
 	}
 });
+
+function DualNumberMatrix(m, n, realArray, dualArray){
+	if(!new.target){
+		return new DualNumberMatrix(...arguments);
+	}
+	if(!Number.isInteger(m) || m <= 0 || !Number.isInteger(n) || n <= 0){
+		throw new Error('Matrix dimensions must be positive integers');
+	}
+	if(realArray.length !== m * n || dualArray.length !== m * n){
+		throw new Error('Data array length does not match matrix dimensions');
+	}
+
+	const realMatrix = Matrix(m, n, realArray);
+	const dualMatrix = Matrix(m, n, dualArray);
+
+	Object.defineProperties(this, {
+		real: {
+			value: realMatrix
+		},
+		dual: {
+			value: dualMatrix
+		}
+	});
+}
 
 module.exports = Matrix;

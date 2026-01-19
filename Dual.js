@@ -8,6 +8,15 @@ function DualNumber(real = 0, dual = 0){
 		return new DualNumber(...arguments);
 	}
 
+	function traverse(node, visited, callback) {
+		if(visited.has(node)) return;
+		visited.add(node);
+		for(const parent of node.parents){
+			traverse(parent, visited, callback);
+		}
+		callback(node);
+	};
+
 	Object.defineProperties(this, {
 		real: {
 			value: real,
@@ -97,23 +106,150 @@ function DualNumber(real = 0, dual = 0){
 				return quotient;
 			}
 		},
+		pow: {
+			value: function(exponent){
+				const powReal = Math.pow(this.real, exponent);
+				const powDual = DualNumber(
+					powReal,
+					exponent * Math.pow(this.real, exponent - 1) * this.dual
+				);
+				powDual.backward = () => {
+					this.grad += exponent * Math.pow(this.real, exponent - 1) * powDual.grad;
+				};
+
+				powDual.parents.push(this);
+				return powDual;
+			}
+		},
+		exp: {
+			value: function(){
+				const expValue = Math.exp(this.real);
+				const expDual = DualNumber(
+					expValue,
+					expValue * this.dual
+				);
+				expDual.backward = () => {
+					this.grad += expValue * expDual.grad;
+				};
+
+				expDual.parents.push(this);
+				return expDual;
+			}
+		},
+		log: {
+			value: function(){
+				const logDual = DualNumber(
+					Math.log(this.real),
+					this.dual / this.real
+				);
+				logDual.backward = () => {
+					this.grad += (1 / this.real) * logDual.grad;
+				};
+
+				logDual.parents.push(this);
+				return logDual;
+			}
+		},
+		abs: {
+			value: function(){
+				const absDual = DualNumber(Math.abs(this.real), (this.real >= 0 ? 1 : -1) * this.dual);
+				absDual.backward = () => {
+					this.grad += (this.real >= 0 ? 1 : -1) * absDual.grad;
+				};
+
+				absDual.parents.push(this);
+				return absDual;
+			}
+		},
+		// sign: {
+		// 	value: function(){
+		// 		const out = DualNumber(this.real === 0 ? 0 : (this.real > 0 ? 1 : -1), 0);
+		// 		out.backward = () => {
+		// 			this.grad += 0;
+		// 		};
+		// 		out.parents.push(this);
+		// 		return out;
+		// 	}
+		// },
+		clip: {
+			value: function(low, high){
+				return this.max(low).min(high);
+			}
+		},
+		max: {
+			// TODO use spread operator to handle multiple args
+			value: function(dualB){
+				if(!(dualB instanceof DualNumber)){
+					dualB = DualNumber(dualB, 0);
+				}
+
+				const out = DualNumber(
+					this.real > dualB.real ? this.real : dualB.real,
+					this.real > dualB.real ? this.dual : dualB.dual
+				);
+				out.backward = () => {
+					if(this.real > dualB.real){
+						this.grad += out.grad;
+					}else if(dualB.real > this.real){
+						dualB.grad += out.grad;
+					}else{
+						this.grad += out.grad * 0.5;
+						dualB.grad += out.grad * 0.5;
+					}
+				};
+
+				out.parents.push(this, dualB);
+				return out;
+			}
+		},
+		min: {
+			// TODO use spread operator to handle multiple args
+			value: function(dualB){
+				if(!(dualB instanceof DualNumber)){
+					dualB = DualNumber(dualB, 0);
+				}
+
+				const out = DualNumber(
+					this.real < dualB.real ? this.real : dualB.real,
+					this.real < dualB.real ? this.dual : dualB.dual
+				);
+				out.backward = () => {
+					if(this.real < dualB.real){
+						this.grad += out.grad;
+					}else if(dualB.real < this.real){
+						dualB.grad += out.grad;
+					}else{
+						this.grad += out.grad * 0.5;
+						dualB.grad += out.grad * 0.5;
+					}
+				};
+
+				out.parents.push(this, dualB);
+				return out;
+			}
+		},
 		parents: {
 			value: []
 		},
-		backprop: {
+		zeroGrads: {
 			value: function(){
-				this.grad = 1;
-				const stack = [this];
-				const visited = new Set();
-				while(stack.length > 0){
-					const node = stack.pop();
-					if(node.backward && !visited.has(node)){
-						node.backward();
-						visited.add(node);
-						for(const parent of node.parents){
-							stack.push(parent);
-						}
-					}
+				traverse(this, new Set(), (node) => {
+					node.grad = 0;
+				});
+			}
+		},
+		backprop: {
+			value: function(seed = 1){
+				const topo = [];
+				traverse(this, new Set(), (node) => {
+					topo.push(node);
+				});
+
+				this.grad += seed;
+
+				for(let i = topo.length - 1; i >= 0; --i){
+					const node = topo[i];
+					node.backward?.();
 				}
 			}
 		}

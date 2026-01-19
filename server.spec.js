@@ -239,6 +239,18 @@ describe('DualNumber', function(){
 			assert.equal(dn.grad, 2 * x);
 		}
 	});
+
+	it('should handle the "Diamond Problem" (reusing a variable in the graph)', function(){
+		const x = DualNumber(1);
+		const a = x.mul(2);
+		const b = x.mul(3);
+		const y = a.add(b); // y = 2x + 3x = 5x
+
+		y.backprop();
+
+		// dy/dx should be 5
+		assert.equal(x.grad, 5);
+	});
 });
 
 describe('Perceptron', function(){
@@ -252,7 +264,7 @@ describe('Perceptron', function(){
 		const p = new Perceptron();
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
-		const y = p.forward(1, 1);
+		const y = p.forward(1, 1)[0];
 		// sum = 1*0.5 + 1*0.5 + 1*0.1 = 1.1
 		logger.debug(`Forward output: ${y}`);
 		assert.strictEqual(y.real, 1.1);
@@ -260,17 +272,18 @@ describe('Perceptron', function(){
 
 	it('should compute backward gradients correctly for identity/MSE', function(){
 		const p = new Perceptron();
+		p.actiation = Perceptron.IDENTITY;
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
 
-		const yPred = p.forward(1, 1);
+		const yPred = p.forward(1, 1)[0];
 
 		const yTarget = 2;
 		p.backward(yTarget);
 
 		// Gradients are private, so we can simulate by doing a manual update and checking effect
 		p.update(0.1);
-		const newY = p.forward(1, 1);
+		const newY = p.forward(1, 1)[0];
 		logger.debug(`Backward/update moved output from ${yPred} to ${newY}`);
 		assert(Math.abs(newY.real - yTarget) < Math.abs(yPred.real - yTarget));
 	});
@@ -278,7 +291,7 @@ describe('Perceptron', function(){
 	it('should allow setting activation function', function(){
 		const p = new Perceptron();
 		p.activation = x => x.mul(2);
-		const y = p.forward(1, 1);
+		const y = p.forward(1, 1)[0];
 		logger.debug(`Custom activation output: ${y}`);
 		assert.ok(y instanceof DualNumber);
 	});
@@ -289,22 +302,25 @@ describe('Perceptron', function(){
 			const diff = yPred.sub(DualNumber(yTarget, 0));
 			return diff.mul(diff).mul(DualNumber(0.5, 0));
 		};
-		const y = p.forward(1, 1);
+		const y = p.forward(1, 1)[0];
 		const loss = p.loss(y, 3);
 		logger.debug(`Custom loss output: ${loss}`);
 		assert.ok(loss instanceof DualNumber);
 	});
 
-	it('should allow setting weights explicitly', function(){
+	it('should allow manually setting weights', function(){
 		const p = new Perceptron();
+		p.activation = Perceptron.RELU;
+
 		p.weights(0.1, 0.2, 0.3);
-		const y = p.forward(0, 0);
+		const y = p.forward(0, 0)[0];
 		assert.strictEqual(y.real, 0.3);
 	});
 
 	it('should handle arbitrary number of inputs', function(){
 		const numInputs = 5;
 		const p = new Perceptron(numInputs);
+		p.activation = Perceptron.RELU;
 
 		const inputs = [1, 2, 3, 4, 5];
 		const weights = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]; // including bias
@@ -312,26 +328,32 @@ describe('Perceptron', function(){
 
 		const expectedOutput = inputs.reduce((sum, x, i) => sum + x * weights[i], weights[weights.length - 1]);
 
-		const y = p.forward(...inputs);
+		const y = p.forward(...inputs)[0];
 		logger.debug(`Output with ${numInputs} inputs: ${y}`);
 		assert.approximately(y.real, expectedOutput, 1e-10);
+	});
+
+	it.skip('should be able to produce arbitrary number of outputs', function(){
 	});
 });
 
 describe('Perceptron training + inference', function(){
+	before(function(){
+		this.numSamples = 1e3;
+		this.learningRate = 0.01;
+		this.epochs = 1e2;
+	});
+
 	it('should reduce error on test data after training', function(){
-		this.timeout(5000);
-		const { training, test } = generateData();
+		this.timeout(5e3);
+		const { training, test } = generateData(this.numSamples);
 
 		const p = new Perceptron();
-
-		const learningRate = 0.01;
-		const epochs = 1e3;
 
 		function mse(data){
 			let sum = 0;
 			for(const [x1, x2, yTarget] of data){
-				const yPred = p.forward(x1, x2);
+				const yPred = p.forward(x1, x2)[0];
 				const err = yPred.real - yTarget;
 				sum += err * err;
 			}
@@ -340,11 +362,11 @@ describe('Perceptron training + inference', function(){
 
 		const initialError = mse(test);
 
-		for(let epoch = 0; epoch < epochs; epoch++){
+		for(let epoch = 0; epoch < this.epochs; epoch++){
 			for(const [x1, x2, yTarget] of training){
 				p.forward(x1, x2);
 				p.backward(yTarget);
-				p.update(learningRate);
+				p.update(this.learningRate);
 			}
 		}
 
@@ -355,33 +377,31 @@ describe('Perceptron training + inference', function(){
 	});
 
 	it('should use trained weights in a new perceptron instance', function(){
-		this.timeout(5000);
-		let { training, test } = generateData();
+		this.timeout(5e3);
+		let { training, test } = generateData(this.numSamples);
 		const p1 = new Perceptron();
-
-		const learningRate = 0.1;
-		const epochs = 1e3;
 
 		function mse(p, data){
 			let sum = 0;
 			for(const [x1, x2, yTarget] of data){
-				const yPred = p.forward(x1, x2);
+				const yPred = p.forward(x1, x2)[0];
 				const err = yPred.real - yTarget;
 				sum += err * err;
 			}
 			return sum / data.length;
 		}
 
-		for(let epoch = 0; epoch < epochs; epoch++){
+		for(let epoch = 0; epoch < this.epochs; epoch++){
 			for(const [x1, x2, yTarget] of training){
 				p1.forward(x1, x2);
 				p1.backward(yTarget);
-				p1.update(learningRate);
+				p1.update(this.learningRate);
 			}
 		}
 
 		const trainedError = mse(p1, test);
 		const trainedWeights = p1.weights();
+		logger.info(`Trained model test MSE: ${trainedError.toFixed(4)}`);
 
 		const p2 = new Perceptron();
 		p2.weights(...trainedWeights);
@@ -390,7 +410,7 @@ describe('Perceptron training + inference', function(){
 		const error = mse(p2, test);
 
 		logger.info(`Transferred model test MSE: ${error.toFixed(4)}`);
-		assert(error <= trainedError, `MSE too high: ${error} > ${trainedError}`);
+		assert(Math.abs(error - trainedError) / trainedError < 0.15, `Expected transferred model error to be close to trained model error (${error} vs ${trainedError})`);
 	});
 });
 

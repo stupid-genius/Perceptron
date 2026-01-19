@@ -21,7 +21,7 @@ const logger = new Logger(path.basename(__filename));
  * }
  * perceptron.update(0.01);
  */
-function Perceptron(numInputs = 2){
+function Perceptron(numInputs = 2, numOutputs = 1){
 	if(!new.target) {
 		return new Perceptron(...arguments);
 	}
@@ -60,6 +60,7 @@ function Perceptron(numInputs = 2){
 					inputs[i] = DualNumber(arguments[i]);
 				}
 				inputs[arguments.length] = DualNumber(1); // bias input
+
 				let sum = DualNumber(0);
 				for(let i = 0; i < inputs.length; ++i){
 					sum = sum.add(weights[i].mul(inputs[i]));
@@ -67,7 +68,7 @@ function Perceptron(numInputs = 2){
 
 				const output = this.activation(sum);
 				outputs[0] = output;
-				return output;
+				return outputs;
 			}
 		},
 		/**
@@ -160,6 +161,25 @@ Object.defineProperties(Perceptron, {
 		value: (yPred, yTarget) => {
 			const diff = yPred.sub(yTarget);
 			return diff.mul(diff).mul(0.5);
+		}
+	},
+	MAE: {
+		value: (yPred, yTarget) => {
+			return yPred.sub(yTarget).abs();
+		}
+	},
+	HUBER: {
+		value: (yPred, yTarget, delta = 1.0) => {
+			const diff = yPred.sub(yTarget);
+			return diff.abs().clip(0, delta).mul(0.5).add(diff.abs().sub(delta).max(0).mul(delta));
+		}
+	},
+	CROSS_ENTROPY: {
+		value: (yPred, yTarget) => {
+			const one = DualNumber(1, 0);
+			const logYPred = yPred.log();
+			const logOneMinusYPred = one.sub(yPred).log();
+			return yTarget.mul(logYPred).add(one.sub(yTarget).mul(logOneMinusYPred)).mul(-1);
 		}
 	}
 });

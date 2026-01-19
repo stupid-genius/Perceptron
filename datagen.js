@@ -1,12 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const nSamples = 100;
-const trainRatio = 0.75;
-const normalize = true;
-const noiseRange = 0.05;
-const trainFile = 'training.csv';
-const testFile = 'test.csv';
+// const nSamples = 100;
+// const trainRatio = 0.75;
+// const normalize = true;
+// const noiseRange = 0.05;
+// const trainFile = 'training.csv';
+// const testFile = 'test.csv';
 
 /**
  * Generates synthetic data for (hours slept, hours studied) -> grade
@@ -20,7 +20,7 @@ const testFile = 'test.csv';
  * @param {string} options.trainFile Path to write training CSV (default 'training.csv')
  * @param {string} options.testFile Path to write test CSV (default 'test.csv')
  */
-function generateData(){
+function generateData(nSamples = 100, trainRatio = 0.75, normalize = true, noiseRange = 0.05){
     const scaleX = normalize ? 12 : 1;
     const scaleY = 1;
 
@@ -72,6 +72,8 @@ function writeCSV(filename, data){
 if(require.main === module){
 	const { training, test } = generateData();
 
+	const trainFile = 'training.csv';
+	const testFile = 'test.csv';
     writeCSV(trainFile, training);
     writeCSV(testFile, test);
 }else{
