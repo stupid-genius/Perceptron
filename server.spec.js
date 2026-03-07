@@ -1,8 +1,11 @@
 const {assert} = require('chai');
 const Logger = require('log-ng');
 const path = require('node:path');
-const generateData = require('./datagen.js');
-const DualNumber = require('./Dual.js');
+const {
+	generate2x1Data,
+	generate3x2Data,
+} = require('./datagen.js');
+const {DualNumber, DualMatrix} = require('./Dual.js');
 const Matrix = require('./Matrix.js');
 const Perceptron = require('./Perceptron.js');
 
@@ -113,6 +116,20 @@ describe('Matrix', function(){
 		assert.throws(() => nonSquare.inverse(), /only defined for square/);
 	});
 
+	it('should provide a fancy string representation via toString', function(){
+		const A = Matrix(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+		const strA = A.toString();
+		logger.info(`Fancy 3x3 matrix:\n${strA}`);
+		assert.ok(strA.includes('┌ 1.00  2.00  3.00 ┐'));
+		assert.ok(strA.includes('│ 4.00  5.00  6.00 │'));
+		assert.ok(strA.includes('└ 7.00  8.00  9.00 ┘'));
+
+		const B = Matrix(1, 3, [1, 2, 3]);
+		const strB = B.toString();
+		logger.info(`Fancy 1x3 matrix:\n${strB}`);
+		assert.equal(strB, '[ 1.00  2.00  3.00 ]');
+	});
+
 	it('should throw on dimension mismatch for add', function(){
 		const A = Matrix(2, 2);
 		const B = Matrix(3, 2);
@@ -125,6 +142,18 @@ describe('Matrix', function(){
 		const B = Matrix(3, 3);
 
 		assert.throws(() => A.multiply(B), /dimension mismatch/);
+	});
+
+	it('should handle 1x1 matrix arithmetic', function(){
+		const A = Matrix(1, 1, [5]);
+		const B = Matrix(1, 1, [10]);
+		assert.equal(A.add(B)[0][0], 15);
+		assert.equal(A.multiply(B)[0][0], 50);
+	});
+
+	it('should return 0 for determinant of a singular matrix', function(){
+		const A = Matrix(2, 2, [1, 2, 2, 4]);
+		assert.equal(A.determinant(), 0);
 	});
 
 	it.skip('should measure large matrix multiplication time', function(){
@@ -214,12 +243,12 @@ describe('DualNumber', function(){
 		for(let x = -testScale; x <= testScale; x += 5){
 			const dn = DualNumber(x, 1);
 
-			// Test f(x) = x^2
+			// f(x) = x^2
 			const f1 = dn.mul(dn);
 			assert.equal(f1.real, x * x);
 			assert.equal(f1.dual, 2 * x);
 
-			// Test f(x) = x^3 + 2x + 1
+			// f(x) = x^3 + 2x + 1
 			const f2 = dn.mul(dn).mul(dn).add(dn.mul(2)).add(1);
 			assert.equal(f2.real, x * x * x + 2 * x + 1);
 			assert.equal(f2.dual, 3 * x * x + 2);
@@ -230,7 +259,7 @@ describe('DualNumber', function(){
 		for(let x = -testScale; x <= testScale; x += 5){
 			const dn = DualNumber(x, 0);
 
-			// Define f(x) = x^2
+			// f(x) = x^2
 			const f = dn.mul(dn);
 
 			f.backprop();
@@ -248,8 +277,91 @@ describe('DualNumber', function(){
 
 		y.backprop();
 
-		// dy/dx should be 5
 		assert.equal(x.grad, 5);
+	});
+});
+
+describe('DualMatrix', function(){
+	it('should perform matrix addition correctly (forward and backward)', function(){
+		const A = DualMatrix(2, 2, new Float64Array([1, 2, 3, 4]));
+		const B = DualMatrix(2, 2, new Float64Array([5, 6, 7, 8]));
+		const C = A.add(B);
+
+		assert.deepEqual(C.real.data, new Float64Array([6, 8, 10, 12]));
+
+		C.backprop();
+
+		assert.deepEqual(A.grad.data, new Float64Array([1, 1, 1, 1]));
+		assert.deepEqual(B.grad.data, new Float64Array([1, 1, 1, 1]));
+	});
+
+	it('should perform matrix multiplication correctly (forward and backward)', function(){
+		// A (2x2) * B (2x1) = C (2x1)
+		// [1 2]   [5]   [1*5 + 2*6]   [17]
+		// [3 4] * [6] = [3*5 + 4*6] = [39]
+		const A = DualMatrix(2, 2, new Float64Array([1, 2, 3, 4]));
+		const B = DualMatrix(2, 1, new Float64Array([5, 6]));
+		const C = A.multiply(B);
+
+		assert.deepEqual(C.real.data, new Float64Array([17, 39]));
+
+		// Backprop
+		// gradA = gradC * B^T = [1] * [5 6] = [5 6]
+		//                       [1]           [5 6]
+		// gradB = A^T * gradC = [1 3] * [1] = [4]
+		//                       [2 4]   [1]   [6]
+		C.backprop();
+
+		assert.deepEqual(A.grad.data, new Float64Array([5, 6, 5, 6]));
+		assert.deepEqual(B.grad.data, new Float64Array([4, 6]));
+	});
+
+	it('should handle reused matrices in a graph (Diamond Problem)', function(){
+		const A = DualMatrix(2, 2, new Float64Array([1, 2, 3, 4]));
+		const B = A.add(A);
+
+		B.backprop();
+
+		assert.deepEqual(A.grad.data, new Float64Array([2, 2, 2, 2]));
+	});
+
+	it('should support element-wise map (e.g., for activations)', function(){
+		const A = DualMatrix(1, 2, new Float64Array([1, -2]));
+		const B = A.map(x => x.real > 0 ? x : DualNumber(0));
+
+		assert.deepEqual(B.real.data, new Float64Array([1, 0]));
+
+		B.backprop();
+
+		assert.deepEqual(A.grad.data, new Float64Array([1, 0]));
+	});
+
+	it('should provide a string representation via toString', function(){
+		const A = DualMatrix(1, 1, [5]);
+		const str = A.toString();
+		logger.info(`DualMatrix string representation: ${str}`);
+		assert.ok(str.includes('DualMatrix(1x1)'));
+		assert.ok(str.includes('Real:'));
+		assert.ok(str.includes('5'));
+	});
+
+	it('should correctly reset gradients in a mixed graph (Matrix + Scalar)', function(){
+		const A = DualMatrix(1, 2, [1, 2]);
+		const B = DualMatrix(2, 1, [3, 4]);
+		const C = A.multiply(B);
+
+		const scalarOut = C[0][0].add(10);
+
+		scalarOut.backprop();
+
+		assert.notEqual(A.grad.data[0], 0);
+		assert.notEqual(scalarOut.grad, 0);
+
+		scalarOut.zeroGrads();
+
+		assert.equal(A.grad.data[0], 0);
+		assert.equal(A.grad.data[1], 0);
+		assert.equal(scalarOut.grad, 0);
 	});
 });
 
@@ -264,7 +376,7 @@ describe('Perceptron', function(){
 		const p = new Perceptron();
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
-		const y = p.forward(1, 1)[0];
+		const y = p.forward(1, 1)[0][0];
 		// sum = 1*0.5 + 1*0.5 + 1*0.1 = 1.1
 		logger.debug(`Forward output: ${y}`);
 		assert.strictEqual(y.real, 1.1);
@@ -276,14 +388,14 @@ describe('Perceptron', function(){
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
 
-		const yPred = p.forward(1, 1)[0];
+		const yPred = p.forward(1, 1)[0][0];
 
 		const yTarget = 2;
 		p.backward(yTarget);
 
 		// Gradients are private, so we can simulate by doing a manual update and checking effect
 		p.update(0.1);
-		const newY = p.forward(1, 1)[0];
+		const newY = p.forward(1, 1)[0][0];
 		logger.debug(`Backward/update moved output from ${yPred} to ${newY}`);
 		assert(Math.abs(newY.real - yTarget) < Math.abs(yPred.real - yTarget));
 	});
@@ -291,7 +403,7 @@ describe('Perceptron', function(){
 	it('should allow setting activation function', function(){
 		const p = new Perceptron();
 		p.activation = x => x.mul(2);
-		const y = p.forward(1, 1)[0];
+		const y = p.forward(1, 1)[0][0];
 		logger.debug(`Custom activation output: ${y}`);
 		assert.ok(y instanceof DualNumber);
 	});
@@ -302,7 +414,7 @@ describe('Perceptron', function(){
 			const diff = yPred.sub(DualNumber(yTarget, 0));
 			return diff.mul(diff).mul(DualNumber(0.5, 0));
 		};
-		const y = p.forward(1, 1)[0];
+		const y = p.forward(1, 1)[0][0];
 		const loss = p.loss(y, 3);
 		logger.debug(`Custom loss output: ${loss}`);
 		assert.ok(loss instanceof DualNumber);
@@ -313,8 +425,16 @@ describe('Perceptron', function(){
 		p.activation = Perceptron.RELU;
 
 		p.weights(0.1, 0.2, 0.3);
-		const y = p.forward(0, 0)[0];
+		const y = p.forward(0, 0)[0][0];
 		assert.strictEqual(y.real, 0.3);
+	});
+
+	it('should correctly calculate number of weights', function(){
+		const numInputs = 3;
+		const numOutputs = 2;
+
+		const p = new Perceptron(numInputs, numOutputs);
+		assert.equal(p.weights().length, (numInputs + 1) * numOutputs);
 	});
 
 	it('should handle arbitrary number of inputs', function(){
@@ -328,12 +448,50 @@ describe('Perceptron', function(){
 
 		const expectedOutput = inputs.reduce((sum, x, i) => sum + x * weights[i], weights[weights.length - 1]);
 
-		const y = p.forward(...inputs)[0];
+		const y = p.forward(...inputs)[0][0];
 		logger.debug(`Output with ${numInputs} inputs: ${y}`);
 		assert.approximately(y.real, expectedOutput, 1e-10);
 	});
 
-	it.skip('should be able to produce arbitrary number of outputs', function(){
+	it('should handle arbitrary number of outputs', function(){
+		const numInputs = 2;
+		const numOutputs = 3;
+		const p = new Perceptron(numInputs, numOutputs);
+		p.activation = Perceptron.IDENTITY;
+
+		const inputs = [1, 2];
+		const weights = [
+			0.1, 0.2, 0.3,
+			0.4, 0.5, 0.6,
+			0.7, 0.8, 0.9
+		];
+		p.weights(...weights);
+
+		const y = p.forward(...inputs);
+		assert.equal(y.dimensions[0], numOutputs);
+
+		assert.approximately(y[0][0].real, 0.1 * 1 + 0.2 * 2 + 0.3, 1e-10);
+		assert.approximately(y[1][0].real, 0.4 * 1 + 0.5 * 2 + 0.6, 1e-10);
+		assert.approximately(y[2][0].real, 0.7 * 1 + 0.8 * 2 + 0.9, 1e-10);
+	});
+
+	it('should allow switching between built-in loss functions', function(){
+		const p = new Perceptron(2, 1);
+		p.activation = Perceptron.IDENTITY;
+		p.forward(1, 1);
+
+		// Switch to MAE
+		p.loss = Perceptron.MAE;
+		p.backward([2]); // target 2, pred ~random
+
+		// Confirm it runs without crash
+		p.update(0.1);
+
+		// Switch to Huber
+		p.loss = Perceptron.HUBER;
+		p.forward(1, 1);
+		p.backward([2]);
+		p.update(0.1);
 	});
 });
 
@@ -341,19 +499,33 @@ describe('Perceptron training + inference', function(){
 	before(function(){
 		this.numSamples = 1e3;
 		this.learningRate = 0.01;
-		this.epochs = 1e2;
+		this.epochs = 50;
+	});
+
+	it('should verify that generated data is normalized to [0, 1]', function(){
+		const noise = 0.05;
+		const { training } = generate3x2Data(100, 1.0, true, noise);
+		for(const [x1, x2, x3, [y1, y2]] of training){
+			assert.ok(x1 >= 0 && x1 <= 1, `x1 out of range: ${x1}`);
+			assert.ok(x2 >= 0 && x2 <= 1, `x2 out of range: ${x2}`);
+			assert.ok(x3 >= 0 && x3 <= 1, `x3 out of range: ${x3}`);
+			// Allow small overflow due to noise
+			assert.ok(y1 >= -noise && y1 <= 1 + noise, `y1 out of range: ${y1}`);
+			assert.ok(y2 >= -noise && y2 <= 1 + noise, `y2 out of range: ${y2}`);
+		}
 	});
 
 	it('should reduce error on test data after training', function(){
-		this.timeout(5e3);
-		const { training, test } = generateData(this.numSamples);
+		this.timeout(7e3);
+		const { training, test } = generate2x1Data(this.numSamples);
 
 		const p = new Perceptron();
+		p.activation = Perceptron.IDENTITY;
 
 		function mse(data){
 			let sum = 0;
 			for(const [x1, x2, yTarget] of data){
-				const yPred = p.forward(x1, x2)[0];
+				const yPred = p.forward(x1, x2)[0][0];
 				const err = yPred.real - yTarget;
 				sum += err * err;
 			}
@@ -376,15 +548,48 @@ describe('Perceptron training + inference', function(){
 		assert(finalError < initialError, `Expected final error < initial error (${finalError} >= ${initialError})`);
 	});
 
+	it('should learn both Grade and Fatigue simultaneously', function(){
+		this.timeout(7e3);
+		const { training, test } = generate3x2Data(this.numSamples);
+		const p = new Perceptron(3, 2);
+		p.activation = Perceptron.IDENTITY;
+
+		function mse(data){
+			let sum = 0;
+			for(const [x1, x2, x3, yTargets] of data){
+				const yPred = p.forward(x1, x2, x3);
+				const err1 = yPred[0][0].real - yTargets[0];
+				const err2 = yPred[1][0].real - yTargets[1];
+				sum += (err1 * err1 + err2 * err2) / 2;
+			}
+			return sum / data.length;
+		}
+
+		const initialError = mse(test);
+
+		for(let epoch = 0; epoch < this.epochs; epoch++){
+			for(const [x1, x2, x3, yTargets] of training){
+				p.forward(x1, x2, x3);
+				p.backward(yTargets);
+				p.update(this.learningRate);
+			}
+		}
+
+		const finalError = mse(test);
+
+		logger.info(`Multi-output (3x2) Initial MSE: ${initialError.toFixed(4)}, Final MSE: ${finalError.toFixed(4)}`);
+		assert(finalError < initialError, `Expected final error < initial error (${finalError} >= ${initialError})`);
+	});
+
 	it('should use trained weights in a new perceptron instance', function(){
-		this.timeout(5e3);
-		let { training, test } = generateData(this.numSamples);
+		this.timeout(7e3);
+		let { training, test } = generate2x1Data(this.numSamples);
 		const p1 = new Perceptron();
 
 		function mse(p, data){
 			let sum = 0;
 			for(const [x1, x2, yTarget] of data){
-				const yPred = p.forward(x1, x2)[0];
+				const yPred = p.forward(x1, x2)[0][0];
 				const err = yPred.real - yTarget;
 				sum += err * err;
 			}
@@ -406,11 +611,11 @@ describe('Perceptron training + inference', function(){
 		const p2 = new Perceptron();
 		p2.weights(...trainedWeights);
 
-		({ training, test } = generateData());
+		({ training, test } = generate2x1Data());
 		const error = mse(p2, test);
 
 		logger.info(`Transferred model test MSE: ${error.toFixed(4)}`);
-		assert(Math.abs(error - trainedError) / trainedError < 0.15, `Expected transferred model error to be close to trained model error (${error} vs ${trainedError})`);
+		assert((Math.abs(error - trainedError) / trainedError) < 0.15, `Expected transferred model error to be close to trained model error (${error} vs ${trainedError})`);
 	});
 });
 

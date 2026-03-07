@@ -1,14 +1,19 @@
 const Logger = require('log-ng');
 const path = require('node:path');
-const DualNumber = require('./Dual.js');
 
 const logger = new Logger(path.basename(__filename));
 
 /**
  * Matrix constructor
  *
- * A simple m x n matrix implementation.  All arithmetic operations are non-volatile and return
- * new Matrix instances.
+ * A simple m x n matrix implementation. Returns an indexable Proxy that supports
+ * 2D access (e.g., matrix[i][j]). All arithmetic operations are non-volatile
+ * and return new Matrix instances.
+ *
+ * @constructor
+ * @param {number} m - number of rows
+ * @param {number} n - number of columns
+ * @param {Array|Float64Array} [dataArray] - optional flat array of length m*n to initialize matrix data
  */
 function Matrix(m, n, dataArray){
 	if(!new.target){
@@ -55,11 +60,9 @@ function Matrix(m, n, dataArray){
 				}
 
 				// LU decomposition with partial pivoting
-				// Create working copy of the matrix data
 				const lu = data.slice();
 				let swaps = 0; // track row swaps for sign of determinant
 
-				// Perform LU decomposition
 				for(let k = 0; k < n - 1; ++k){
 					// Find pivot (largest absolute value in column k, from row k downward)
 					let maxRow = k;
@@ -72,7 +75,6 @@ function Matrix(m, n, dataArray){
 						}
 					}
 
-					// Swap rows if needed
 					if(maxRow !== k){
 						for(let j = 0; j < n; ++j){
 							const temp = lu[k * n + j];
@@ -137,7 +139,7 @@ function Matrix(m, n, dataArray){
 
 				// For larger matrices, use LU decomposition with partial pivoting
 				const lu = data.slice();
-				const perm = new Array(n); // permutation array to track row swaps
+				const perm = new Array(n);
 				for(let i = 0; i < n; ++i){
 					perm[i] = i;
 				}
@@ -215,7 +217,6 @@ function Matrix(m, n, dataArray){
 						x[i] = sum / lu[i * n + i];
 					}
 
-					// Store this column in the inverse matrix
 					for(let row = 0; row < n; ++row){
 						invData[row * n + col] = x[row];
 					}
@@ -254,6 +255,44 @@ function Matrix(m, n, dataArray){
 				return Matrix(m, n, scaled);
 			}
 		},
+		toString: {
+			value: function(){
+				const colWidths = new Array(n).fill(0);
+				for(let j = 0; j < n; j++){
+					for(let i = 0; i < m; i++){
+						const str = data[i * n + j].toFixed(2);
+						colWidths[j] = Math.max(colWidths[j], str.length);
+					}
+				}
+
+				let result = '';
+				for(let i = 0; i < m; i++){
+					let left, right;
+					if(m === 1){
+						left = '[ ';
+						right = ' ]';
+					}else if(i === 0){
+						left = '┌ ';
+						right = ' ┐';
+					}else if(i === m - 1){
+						left = '└ ';
+						right = ' ┘';
+					}else{
+						left = '│ ';
+						right = ' │';
+					}
+
+					let rowStr = left;
+					for(let j = 0; j < n; j++){
+						const val = data[i * n + j].toFixed(2);
+						rowStr += val.padStart(colWidths[j]) + (j === n - 1 ? '' : '  ');
+					}
+					rowStr += right + '\n';
+					result += rowStr;
+				}
+				return result.trimEnd();
+			}
+		},
 		transpose: {
 			value: function(){
 				const transposedArray = new Float64Array(n * m);
@@ -271,32 +310,40 @@ function Matrix(m, n, dataArray){
 	// allow 2D indexing, ie. matrix[i][j]
 	const indexable = new Proxy(this, {
 		get(target, prop, receiver){
-			const row = Number(prop);
-			if(!Number.isNaN(row) && row >= 0 && row < m){
-				return new Proxy({}, {
-					get(_, colProp){
-						const col = Number(colProp);
-						if(!Number.isNaN(col) && col >= 0 && col < n){
-							return data[row * n + col];
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					return new Proxy({}, {
+						get(_, colProp){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									return data[row * n + col];
+								}
+							}
+							return undefined;
+						},
+						set(_, colProp, value){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									data[row * n + col] = value;
+									return true;
+								}
+							}
+							return false;
 						}
-						return undefined;
-					},
-					set(_, colProp, value){
-						const col = Number(colProp);
-						if(!Number.isNaN(col) && col >= 0 && col < n){
-							data[row * n + col] = value;
-							return true;
-						}
-						return false;
-					}
-				});
+					});
+				}
 			}
 			return Reflect.get(target, prop, receiver);
 		},
 		set(target, prop, value, receiver){
-			const row = Number(prop);
-			if(!Number.isNaN(row) && row >= 0 && row < m){
-				throw new Error('Use matrix[row][col] to set individual elements.');
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					throw new Error('Use matrix[row][col] to set individual elements.');
+				}
 			}
 			return Reflect.set(target, prop, value, receiver);
 		}
@@ -315,29 +362,5 @@ Object.defineProperties(Matrix, {
 		}
 	}
 });
-
-function DualNumberMatrix(m, n, realArray, dualArray){
-	if(!new.target){
-		return new DualNumberMatrix(...arguments);
-	}
-	if(!Number.isInteger(m) || m <= 0 || !Number.isInteger(n) || n <= 0){
-		throw new Error('Matrix dimensions must be positive integers');
-	}
-	if(realArray.length !== m * n || dualArray.length !== m * n){
-		throw new Error('Data array length does not match matrix dimensions');
-	}
-
-	const realMatrix = Matrix(m, n, realArray);
-	const dualMatrix = Matrix(m, n, dualArray);
-
-	Object.defineProperties(this, {
-		real: {
-			value: realMatrix
-		},
-		dual: {
-			value: dualMatrix
-		}
-	});
-}
 
 module.exports = Matrix;

@@ -1,86 +1,91 @@
 const Logger = require('log-ng');
 const path = require('node:path');
-const DualNumber = require('./Dual.js');
-// const Matrix = require('./Matrix.js');
+const { DualNumber, DualMatrix } = require('./Dual.js');
 
 const logger = new Logger(path.basename(__filename));
 
 /**
  * Perceptron constructor
  *
+ * @param {number} [numInputs=2] - Number of input features
+ * @param {number} [numOutputs=1] - Number of output neurons
+ *
  * @example
  * // inference w/pre-trained weights
- * perceptron.weights(0.4, 0.6, -0.2).activation(fn).forward(x1, x2);
+ * const p = new Perceptron(2, 1);
+ * p.weights(0.4, 0.6, -0.2);
+ * p.forward(1, 1);
  *
  * // train
- * perceptron.activation(fn).loss(fn);
- * const trainingData = [];
- * for(const [x1, x2, yTarget] of trainingData){
- *   perceptron.forward(x1, x2);
- *   perceptron.backward(yTarget);
+ * const p = new Perceptron(2, 2);
+ * p.activation = Perceptron.SIGMOID;
+ * p.loss = Perceptron.MSE;
+ * const trainingData = [[1, 1, [0.8, 0.2]]];
+ * for(const [x1, x2, yTargets] of trainingData){
+ *   p.forward(x1, x2);
+ *   p.backward(yTargets);
+ *   p.update(0.01);
  * }
- * perceptron.update(0.01);
  */
 function Perceptron(numInputs = 2, numOutputs = 1){
 	if(!new.target) {
 		return new Perceptron(...arguments);
 	}
 
-	const inputs = [];
-	const weights = Array(numInputs + 1).fill(0).map(() => DualNumber(Math.random() * 2 - 1));
-	const outputs = [];
+	const weights = DualMatrix(numOutputs, numInputs + 1, new Float64Array(numOutputs * (numInputs + 1)).map(() => Math.random() * 2 - 1));
+	let outputs = [];
 
 	Object.defineProperties(this, {
 		/**
-		 * Set the activation function
+		 * The activation function
 		 * This function must operate on DualNumber instances
 		 *
-		 * @param {function} fn - Activation function that takes a DualNumber and returns a DualNumber
+		 * @type {function}
 		 * @example
-		 * perceptron.activation((x) => {
-		 *  const dnX = DualNumber(x, 1);
-		 *  const dnOut = dnX.real < 0 ? DualNumber(0, 0) : dnX;
-		 *  return dnOut;
-		 * });
+		 * p.activation = (x) => {
+		 *  return x.max(0); // ReLU
+		 * };
 		 */
 		activation: {
-			value: Perceptron.RELU,
+			value: Perceptron.SIGMOID,
 			writable: true
 		},
 		backward: {
 			value: function(yTarget){
-				const loss = this.loss(outputs[0], yTarget);
+				const loss = this.loss(outputs, yTarget);
 				loss.backprop();
 				return this;
 			}
 		},
 		forward: {
 			value: function(){
-				for(let i = 0; i < arguments.length; ++i){
-					inputs[i] = DualNumber(arguments[i]);
+				const inputData = new Float64Array(numInputs + 1);
+				for(let i = 0; i < numInputs; ++i){
+					inputData[i] = arguments[i] ?? 0;
 				}
-				inputs[arguments.length] = DualNumber(1); // bias input
+				inputData[numInputs] = 1; // bias input
 
-				let sum = DualNumber(0);
-				for(let i = 0; i < inputs.length; ++i){
-					sum = sum.add(weights[i].mul(inputs[i]));
-				}
+				const inputVector = DualMatrix(numInputs + 1, 1, inputData);
+				const sums = weights.multiply(inputVector);
 
-				const output = this.activation(sum);
-				outputs[0] = output;
+				outputs = sums.map(this.activation);
 				return outputs;
 			}
 		},
 		/**
-		 * Set the loss function
-		 * This function must operate on DualNumber instances
+		 * The loss function
+		 * This function must operate on DualMatrix (yPred) and raw target values (yTarget)
 		 *
-		 * @param {function} fn - Loss function that takes (yPred: DualNumber, yTarget: number) and returns a DualNumber
+		 * @type {function}
 		 * @example
-		 * perceptron.loss((yPred, yTarget) => {
-		 *  const diff = yPred.sub(DualNumber(yTarget, 0));
-		 *  return diff.mul(diff).mul(DualNumber(0.5, 0));
-		 * });
+		 * p.loss = (yPred, yTarget) => {
+		 *  let totalLoss = DualNumber(0);
+		 *  for(let i = 0; i < yPred.dimensions[0]; i++){
+		 *    const diff = yPred[i][0].sub(yTarget[i]);
+		 *    totalLoss = totalLoss.add(diff.mul(diff).mul(0.5));
+		 *  }
+		 *  return totalLoss;
+		 * };
 		 */
 		loss: {
 			value: Perceptron.MSE,
@@ -88,21 +93,23 @@ function Perceptron(numInputs = 2, numOutputs = 1){
 		},
 		update: {
 			value: function(learningRate){
-				for(let i = 0; i < weights.length; ++i){
-					weights[i].real -= learningRate * weights[i].grad;
-					weights[i].grad = 0; // reset so we can accumulate again
+				for(let i = 0; i < weights.real.data.length; ++i){
+					weights.real.data[i] -= learningRate * weights.grad.data[i];
 				}
+				weights.zeroGrads();
 				return this;
 			}
 		},
 		weights: {
 			value: function(){
 				if(arguments.length === 0){
-					return weights.map(w => w.real);
+					return weights.real.data;
 				}
 
-				for(let i = 0; i < arguments.length; ++i){
-					weights[i] = DualNumber(arguments[i]);
+				if(arguments.length === 1 && (arguments[0] instanceof Float64Array || Array.isArray(arguments[0]))){
+					weights.real.data.set(arguments[0]);
+				}else{
+					weights.real.data.set(arguments);
 				}
 				return this;
 			}
@@ -159,27 +166,61 @@ Object.defineProperties(Perceptron, {
 Object.defineProperties(Perceptron, {
 	MSE: {
 		value: (yPred, yTarget) => {
-			const diff = yPred.sub(yTarget);
-			return diff.mul(diff).mul(0.5);
+			let totalLoss = DualNumber(0);
+			const numOutputs = yPred.dimensions[0];
+			for(let i = 0; i < numOutputs; ++i){
+				const pred = yPred[i][0];
+				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
+				const diff = pred.sub(target);
+				totalLoss = totalLoss.add(diff.mul(diff).mul(0.5));
+			}
+			return totalLoss;
 		}
 	},
 	MAE: {
 		value: (yPred, yTarget) => {
-			return yPred.sub(yTarget).abs();
+			let totalLoss = DualNumber(0);
+			const numOutputs = yPred.dimensions[0];
+			for(let i = 0; i < numOutputs; ++i){
+				const pred = yPred[i][0];
+				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
+				totalLoss = totalLoss.add(pred.sub(target).abs());
+			}
+			return totalLoss;
 		}
 	},
 	HUBER: {
 		value: (yPred, yTarget, delta = 1.0) => {
-			const diff = yPred.sub(yTarget);
-			return diff.abs().clip(0, delta).mul(0.5).add(diff.abs().sub(delta).max(0).mul(delta));
+			let totalLoss = DualNumber(0);
+			const numOutputs = yPred.dimensions[0];
+			for(let i = 0; i < numOutputs; ++i){
+				const pred = yPred[i][0];
+				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
+				const diff = pred.sub(target);
+				const loss = diff.abs().clip(0, delta).mul(0.5).add(diff.abs().sub(delta).max(0).mul(delta));
+				totalLoss = totalLoss.add(loss);
+			}
+			return totalLoss;
 		}
 	},
 	CROSS_ENTROPY: {
 		value: (yPred, yTarget) => {
+			let totalLoss = DualNumber(0);
+			const numOutputs = yPred.dimensions[0];
 			const one = DualNumber(1, 0);
-			const logYPred = yPred.log();
-			const logOneMinusYPred = one.sub(yPred).log();
-			return yTarget.mul(logYPred).add(one.sub(yTarget).mul(logOneMinusYPred)).mul(-1);
+			for(let i = 0; i < numOutputs; ++i){
+				const pred = yPred[i][0];
+				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
+
+				const targetDN = typeof target === 'number' ? DualNumber(target) : target;
+				// Note: log(0) is -Infinity. If pred is 0 or 1, this will crash or return NaN.
+				// Maybe add a small epsilon (e.g., 1e-7) to pred to prevent this.
+				const logYPred = pred.log();
+				const logOneMinusYPred = one.sub(pred).log();
+				const loss = targetDN.mul(logYPred).add(one.sub(targetDN).mul(logOneMinusYPred)).mul(-1);
+				totalLoss = totalLoss.add(loss);
+			}
+			return totalLoss;
 		}
 	}
 });

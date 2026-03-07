@@ -1,21 +1,37 @@
 const Logger = require('log-ng');
 const path = require('node:path');
+const Matrix = require('./Matrix.js');
 
 const logger = new Logger(path.basename(__filename));
+
+function traverse(root, visited, callback){
+	const stack = [[root, 0]];
+
+	while(stack.length > 0){
+		const entry = stack[stack.length - 1];
+		const node = entry[0];
+		const pIdx = entry[1];
+
+		if(visited.has(node)){
+			stack.pop();
+			continue;
+		}
+
+		if(pIdx < node.parents.length){
+			entry[1]++;
+			stack.push([node.parents[pIdx], 0]);
+		}else{
+			visited.add(node);
+			callback(node);
+			stack.pop();
+		}
+	}
+}
 
 function DualNumber(real = 0, dual = 0){
 	if(!new.target){
 		return new DualNumber(...arguments);
 	}
-
-	function traverse(node, visited, callback) {
-		if(visited.has(node)) return;
-		visited.add(node);
-		for(const parent of node.parents){
-			traverse(parent, visited, callback);
-		}
-		callback(node);
-	};
 
 	Object.defineProperties(this, {
 		real: {
@@ -183,23 +199,23 @@ function DualNumber(real = 0, dual = 0){
 					dualB = DualNumber(dualB, 0);
 				}
 
-				const out = DualNumber(
+				const max = DualNumber(
 					this.real > dualB.real ? this.real : dualB.real,
 					this.real > dualB.real ? this.dual : dualB.dual
 				);
-				out.backward = () => {
+				max.backward = () => {
 					if(this.real > dualB.real){
-						this.grad += out.grad;
+						this.grad += max.grad;
 					}else if(dualB.real > this.real){
-						dualB.grad += out.grad;
+						dualB.grad += max.grad;
 					}else{
-						this.grad += out.grad * 0.5;
-						dualB.grad += out.grad * 0.5;
+						this.grad += max.grad * 0.5;
+						dualB.grad += max.grad * 0.5;
 					}
 				};
 
-				out.parents.push(this, dualB);
-				return out;
+				max.parents.push(this, dualB);
+				return max;
 			}
 		},
 		min: {
@@ -209,23 +225,23 @@ function DualNumber(real = 0, dual = 0){
 					dualB = DualNumber(dualB, 0);
 				}
 
-				const out = DualNumber(
+				const min = DualNumber(
 					this.real < dualB.real ? this.real : dualB.real,
 					this.real < dualB.real ? this.dual : dualB.dual
 				);
-				out.backward = () => {
+				min.backward = () => {
 					if(this.real < dualB.real){
-						this.grad += out.grad;
+						this.grad += min.grad;
 					}else if(dualB.real < this.real){
-						dualB.grad += out.grad;
+						dualB.grad += min.grad;
 					}else{
-						this.grad += out.grad * 0.5;
-						dualB.grad += out.grad * 0.5;
+						this.grad += min.grad * 0.5;
+						dualB.grad += min.grad * 0.5;
 					}
 				};
 
-				out.parents.push(this, dualB);
-				return out;
+				min.parents.push(this, dualB);
+				return min;
 			}
 		},
 		parents: {
@@ -234,7 +250,11 @@ function DualNumber(real = 0, dual = 0){
 		zeroGrads: {
 			value: function(){
 				traverse(this, new Set(), (node) => {
-					node.grad = 0;
+					if(node.grad instanceof Matrix){
+						node.grad.data.fill(0);
+					}else{
+						node.grad = 0;
+					}
 				});
 			}
 		},
@@ -256,11 +276,193 @@ function DualNumber(real = 0, dual = 0){
 	});
 }
 
-// function DualMatrix(){
-// 	if(!new.target){
-// 		return new DualMatrix(...arguments);
-// 	}
-// }
+function DualMatrix(m, n, dataArray){
+	if(!new.target){
+		return new DualMatrix(...arguments);
+	}
 
-module.exports = DualNumber;
+	const real = Matrix(m, n, dataArray);
+	const grad = Matrix(m, n); // initialized to zeros
+
+	Object.defineProperties(this, {
+		real: {
+			value: real
+		},
+		grad: {
+			value: grad
+		},
+		parents: {
+			value: []
+		},
+		dimensions: {
+			get: () => [m, n]
+		},
+		add: {
+			value: function(other){
+				if(!(other instanceof DualMatrix)){
+					throw new Error('DualMatrix addition only supports DualMatrix for now');
+				}
+
+				const sum = DualMatrix(m, n, this.real.add(other.real).data);
+				sum.backward = () => {
+					// dLoss/dA = dLoss/dOut, dLoss/dB = dLoss/dOut
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += sum.grad.data[i];
+						other.grad.data[i] += sum.grad.data[i];
+					}
+				};
+
+				sum.parents.push(this, other);
+				return sum;
+			}
+		},
+		multiply: {
+			value: function(other){
+				if(!(other instanceof DualMatrix)){
+					throw new Error('DualMatrix multiplication only supports DualMatrix for now');
+				}
+
+				const prodReal = this.real.multiply(other.real);
+				const prod = DualMatrix(m, other.real.dimensions[1], prodReal.data);
+
+				prod.backward = () => {
+					// Matrix Calculus:
+					// If Y = A * B, then:
+					// gradA += gradY * B^T
+					// gradB += A^T * gradY
+					const gradA = prod.grad.multiply(other.real.transpose());
+					const gradB = this.real.transpose().multiply(prod.grad);
+
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += gradA.data[i];
+					}
+					for(let i = 0; i < other.grad.data.length; ++i){
+						other.grad.data[i] += gradB.data[i];
+					}
+				};
+
+				prod.parents.push(this, other);
+				return prod;
+			}
+		},
+		transpose: {
+			value: function(){
+				const out = DualMatrix(n, m, this.real.transpose().data);
+				out.backward = () => {
+					const gradT = out.grad.transpose();
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += gradT.data[i];
+					}
+				};
+				out.parents.push(this);
+				return out;
+			}
+		},
+		map: {
+			value: function(fn){
+				const outData = new Float64Array(m * n);
+				const innerResults = [];
+
+				for(let i = 0; i < m * n; ++i){
+					const dn = DualNumber(this.real.data[i]);
+					const res = fn(dn);
+					outData[i] = res.real;
+					innerResults.push({ dn, res });
+				}
+
+				const out = DualMatrix(m, n, outData);
+				out.backward = () => {
+					for(let i = 0; i < m * n; ++i){
+						const { dn, res } = innerResults[i];
+						res.backprop(out.grad.data[i]);
+						this.grad.data[i] += dn.grad;
+					}
+				};
+
+				out.parents.push(this);
+				return out;
+			}
+		},
+		toString: {
+			value: function(){
+				return `DualMatrix(${m}x${n}):\nReal:\n${this.real.toString()}\nGrad:\n${this.grad.toString()}`;
+			}
+		},
+		zeroGrads: {
+			value: function(){
+				traverse(this, new Set(), (node) => {
+					// Handle both DualNumber (scalar .grad) and DualMatrix (matrix .grad)
+					if(node.grad instanceof Matrix){
+						node.grad.data.fill(0);
+					}else{
+						node.grad = 0;
+					}
+				});
+			}
+		},
+		backprop: {
+			value: function(seed){
+				const topo = [];
+				traverse(this, new Set(), (node) => {
+					topo.push(node);
+				});
+
+				if(!seed){
+					// Default to a matrix of ones if no seed is provided
+					seed = Matrix(m, n, new Float64Array(m * n).fill(1));
+				}
+
+				if(seed instanceof Matrix){
+					for(let i = 0; i < grad.data.length; ++i){
+						grad.data[i] += seed.data[i];
+					}
+				}else{
+					for(let i = 0; i < grad.data.length; ++i){
+						grad.data[i] += seed;
+					}
+				}
+
+				for(let i = topo.length - 1; i >= 0; --i){
+					const node = topo[i];
+					node.backward?.();
+				}
+			}
+		}
+	});
+
+	const indexable = new Proxy(this, {
+		get(target, prop, receiver){
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					return new Proxy({}, {
+						get(_, colProp){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									const index = row * n + col;
+									const out = DualNumber(target.real.data[index]);
+									out.backward = () => {
+										target.grad.data[index] += out.grad;
+									};
+									out.parents.push(target);
+									return out;
+								}
+							}
+							return undefined;
+						}
+					});
+				}
+			}
+			return Reflect.get(target, prop, receiver);
+		}
+	});
+
+	return indexable;
+}
+
+module.exports = {
+	DualNumber,
+	DualMatrix
+};
 
