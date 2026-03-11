@@ -5,39 +5,134 @@ const { DualNumber, DualMatrix } = require('./Dual.js');
 const logger = new Logger(path.basename(__filename));
 
 /**
- * Perceptron constructor
+ * Layer constructor
  *
- * @param {number} [numInputs=2] - Number of input features
- * @param {number} [numOutputs=1] - Number of output neurons
- *
- * @example
- * // inference w/pre-trained weights
- * const p = new Perceptron(2, 1);
- * p.weights(0.4, 0.6, -0.2);
- * p.forward(1, 1);
- *
- * // train
- * const p = new Perceptron(2, 2);
- * p.activation = Perceptron.SIGMOID;
- * p.loss = Perceptron.MSE;
- * const trainingData = [[1, 1, [0.8, 0.2]]];
- * for(const [x1, x2, yTargets] of trainingData){
- *   p.forward(x1, x2);
- *   p.backward(yTargets);
- *   p.update(0.01);
- * }
+ * @param {number} numInputs - Number of input features
+ * @param {number} numOutputs - Number of neurons in this layer
  */
-function Perceptron(numInputs = 2, numOutputs = 1){
-	if(!new.target) {
-		return new Perceptron(...arguments);
+function Layer(numInputs, numOutputs){
+	if(!new.target){
+		return new Layer(...arguments);
 	}
 
-	const weights = DualMatrix(numOutputs, numInputs + 1, new Float64Array(numOutputs * (numInputs + 1)).map(() => Math.random() * 2 - 1));
-	let outputs = [];
+	const weights = DualMatrix(numOutputs, numInputs, new Float64Array(numOutputs * numInputs).map(() => {
+		return Math.random() * 2 - 1;
+	}));
+	const bias = DualMatrix(numOutputs, 1, new Float64Array(numOutputs).map(() => {
+		return Math.random() * 2 - 1;
+	}));
 
 	Object.defineProperties(this, {
 		/**
 		 * The activation function
+		 * @type {function}
+		 */
+		activation: {
+			value: Perceptron.SIGMOID,
+			writable: true
+		},
+		/**
+		 * The bias vector getter/setter
+		 * @param {Float64Array|Array<number>|...number} [data] - New bias data to set
+		 * @returns {Float64Array|this} The bias data if no arguments, or 'this' for chaining
+		 */
+		bias: {
+			value: function(){
+				if(arguments.length === 0){
+					return bias.real.data;
+				}
+				if(arguments.length === 1 && (arguments[0] instanceof Float64Array || Array.isArray(arguments[0]))){
+					bias.real.data.set(arguments[0]);
+				}else{
+					bias.real.data.set(arguments);
+				}
+				return this;
+			}
+		},
+		/**
+		 * Forward pass through the layer
+		 * @param {DualMatrix} inputVector - The input column vector (numInputs x 1)
+		 * @returns {DualMatrix} The output column vector (numOutputs x 1)
+		 */
+		forward: {
+			value: function(inputVector){
+				return weights.multiply(inputVector).add(bias).map(this.activation);
+			}
+		},
+		numInputs: {
+			value: numInputs
+		},
+		numOutputs: {
+			value: numOutputs
+		},
+		/**
+		 * Update weights and biases using accumulated gradients
+		 * @param {number} learningRate
+		 * @returns {this}
+		 */
+		update: {
+			value: function(learningRate){
+				for(let i = 0; i < weights.real.data.length; ++i){
+					weights.real.data[i] -= learningRate * weights.grad.data[i];
+				}
+				weights.grad.data.fill(0);
+
+				for(let i = 0; i < bias.real.data.length; ++i){
+					bias.real.data[i] -= learningRate * bias.grad.data[i];
+				}
+				bias.grad.data.fill(0);
+
+				return this;
+			}
+		},
+		/**
+		 * The weights matrix getter/setter
+		 * @param {Float64Array|Array<number>|...number} [data] - New weights data to set
+		 * @returns {Float64Array|this} The weights data if no arguments, or 'this' for chaining
+		 */
+		weights: {
+			value: function(){
+				if(arguments.length === 0){
+					return weights.real.data;
+				}
+				if(arguments.length === 1 && (arguments[0] instanceof Float64Array || Array.isArray(arguments[0]))){
+					weights.real.data.set(arguments[0]);
+				}else{
+					weights.real.data.set(arguments);
+				}
+				return this;
+			}
+		}
+	});
+}
+
+/**
+ * Perceptron constructor (General MLP implementation)
+ *
+ * @param {Array<number>} [schema=[2, 1]] - Array defining the architecture [numInputs, ...hidden, numOutputs]
+ *
+ * @example
+ * // SLP (2 inputs, 1 output)
+ * const p = new Perceptron([2, 1]);
+ *
+ * // MLP (2 inputs, 16 hidden, 1 output)
+ * const p = new Perceptron([2, 16, 1]);
+ */
+function Perceptron(schema = [2, 1]){
+	if(!new.target){
+		return new Perceptron(...arguments);
+	}
+
+	const layers = [];
+	for(let i = 0; i < schema.length - 1; ++i){
+		layers.push(new Layer(schema[i], schema[i + 1]));
+	}
+
+	let outputs = null;
+
+	Object.defineProperties(this, {
+		/**
+		 * The activation function for all layers
 		 * This function must operate on DualNumber instances
 		 *
 		 * @type {function}
@@ -47,28 +142,49 @@ function Perceptron(numInputs = 2, numOutputs = 1){
 		 * };
 		 */
 		activation: {
-			value: Perceptron.SIGMOID,
-			writable: true
+			get: () => {
+				return layers[0].activation;
+			},
+			set: (fn) => {
+				for(const layer of layers){
+					layer.activation = fn;
+				}
+			}
 		},
+		/**
+		 * Backward pass: calculate loss and trigger backprop
+		 * @param {Array|number} yTarget - Target values
+		 * @returns {this}
+		 */
 		backward: {
 			value: function(yTarget){
-				const loss = this.loss(outputs, yTarget);
-				loss.backprop();
+				if(!outputs){
+					throw new Error('Must call forward before backward');
+				}
+				const lossNode = this.loss(outputs, yTarget);
+				lossNode.backprop();
 				return this;
 			}
 		},
+		/**
+		 * Forward pass through all layers
+		 * @param {...number} args - Input features
+		 * @returns {DualMatrix} The output column vector (numOutputs x 1)
+		 */
 		forward: {
-			value: function(){
-				const inputData = new Float64Array(numInputs + 1);
-				for(let i = 0; i < numInputs; ++i){
-					inputData[i] = arguments[i] ?? 0;
+
+			value: function(...args){
+				const inputData = new Float64Array(schema[0]);
+				for(let i = 0; i < schema[0]; ++i){
+					inputData[i] = args[i] ?? 0;
 				}
-				inputData[numInputs] = 1; // bias input
+				let current = DualMatrix(schema[0], 1, inputData);
 
-				const inputVector = DualMatrix(numInputs + 1, 1, inputData);
-				const sums = weights.multiply(inputVector);
+				for(const layer of layers){
+					current = layer.forward(current);
+				}
 
-				outputs = sums.map(this.activation);
+				outputs = current;
 				return outputs;
 			}
 		},
@@ -91,28 +207,75 @@ function Perceptron(numInputs = 2, numOutputs = 1){
 			value: Perceptron.MSE,
 			writable: true
 		},
+		/**
+		 * Update all layers' weights and biases
+		 * @param {number} learningRate
+		 * @returns {this}
+		 */
 		update: {
 			value: function(learningRate){
-				for(let i = 0; i < weights.real.data.length; ++i){
-					weights.real.data[i] -= learningRate * weights.grad.data[i];
+				for(const layer of layers){
+					layer.update(learningRate);
 				}
-				weights.zeroGrads();
 				return this;
 			}
 		},
+		/**
+		 * Get or set all weights and biases as a single flat array
+		 * @param {Float64Array|Array<number>|...number} [data] - New weights/biases to set
+		 * @returns {Float64Array|this} All weights/biases if no arguments, or 'this' for chaining
+		 */
 		weights: {
 			value: function(){
 				if(arguments.length === 0){
-					return weights.real.data;
+					let totalSize = 0;
+					for(const l of layers){
+						totalSize += l.weights().length + l.bias().length;
+					}
+					const all = new Float64Array(totalSize);
+					let offset = 0;
+					for(const l of layers){
+						all.set(l.weights(), offset);
+						offset += l.weights().length;
+						all.set(l.bias(), offset);
+						offset += l.bias().length;
+					}
+					return all;
 				}
 
+				let allData;
 				if(arguments.length === 1 && (arguments[0] instanceof Float64Array || Array.isArray(arguments[0]))){
-					weights.real.data.set(arguments[0]);
+					allData = arguments[0];
 				}else{
-					weights.real.data.set(arguments);
+					allData = Array.from(arguments);
+				}
+
+				let offset = 0;
+				for(const l of layers){
+					const wSize = l.numInputs * l.numOutputs;
+					const bSize = l.numOutputs;
+					l.weights(allData.slice(offset, offset + wSize));
+					offset += wSize;
+					l.bias(allData.slice(offset, offset + bSize));
+					offset += bSize;
 				}
 				return this;
 			}
+		}
+	});
+
+	return new Proxy(this, {
+		get(target, prop, receiver){
+			if(typeof prop === 'string'){
+				const idx = Number(prop);
+				if(!Number.isNaN(idx) && idx >= 0 && idx < layers.length){
+					return layers[idx];
+				}
+				if(prop === 'length'){
+					return layers.length;
+				}
+			}
+			return Reflect.get(target, prop, receiver);
 		}
 	});
 }
@@ -157,6 +320,29 @@ Object.defineProperties(Perceptron, {
 			const out = DualNumber(t);
 			out.backward = () => {
 				x.grad += (1 - t * t) * out.grad;
+			};
+			out.parents.push(x);
+			return out;
+		}
+	},
+	SOFTMAX: {
+		// TODO: validate this is correct
+		value: function(x){
+			const max = Math.max(...x.real);
+			const exps = x.real.map(v => Math.exp(v - max));
+			const sumExps = exps.reduce((a, b) => a + b, 0);
+			const out = DualMatrix(x.dimensions[0], 1, new Float64Array(exps.map(e => e / sumExps)));
+			out.backward = () => {
+				for(let i = 0; i < x.dimensions[0]; ++i){
+					let gradSum = 0;
+					for(let j = 0; j < x.dimensions[0]; ++j){
+						const s_i = out[i][0].real;
+						const s_j = out[j][0].real;
+						const gradContribution = (i === j ? s_i * (1 - s_i) : -s_i * s_j) * out.grad.data[j];
+						gradSum += gradContribution;
+					}
+					x.grad.data[i] += gradSum;
+				}
 			};
 			out.parents.push(x);
 			return out;
@@ -225,4 +411,7 @@ Object.defineProperties(Perceptron, {
 	}
 });
 
-module.exports = Perceptron;
+module.exports = {
+	Perceptron,
+	Layer
+};

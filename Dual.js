@@ -4,6 +4,12 @@ const Matrix = require('./Matrix.js');
 
 const logger = new Logger(path.basename(__filename));
 
+/**
+ * Internal utility to traverse the computation graph in topological order
+ * @param {DualNumber|DualMatrix} root - The starting node
+ * @param {Set} visited - Set to keep track of visited nodes
+ * @param {function} callback - Function to call on each node
+ */
 function traverse(root, visited, callback){
 	const stack = [[root, 0]];
 
@@ -28,6 +34,30 @@ function traverse(root, visited, callback){
 	}
 }
 
+/**
+ * DualNumber constructor for automatic differentiation
+ * @param {number} [real=0] - The real part
+ * @param {number} [dual=0] - The dual part (seed for derivative)
+ *
+ * @example
+ * // Forward Mode Differentiation:
+ * // f(x) = x^2 + 2x + 1, f'(x) = 2x + 2
+ * // For x = 3: f(3) = 16, f'(3) = 8
+ * const x = DualNumber(3, 1); // seed dual with 1 for f'(x)
+ * const f = x.mul(x).add(x.mul(2)).add(1);
+ * console.log(f.real); // 16
+ * console.log(f.dual); // 8
+ *
+ * @example
+ * // Backward Mode (Reverse) Differentiation:
+ * // Use for multiple inputs or complex graphs
+ * const a = DualNumber(3);
+ * const b = DualNumber(2);
+ * const out = a.mul(a).add(a.mul(b)); // f(a, b) = a^2 + ab
+ * out.backprop();
+ * console.log(a.grad); // df/da = 2a + b = 2(3) + 2 = 8
+ * console.log(b.grad); // df/db = a = 3
+ */
 function DualNumber(real = 0, dual = 0){
 	if(!new.target){
 		return new DualNumber(...arguments);
@@ -276,6 +306,12 @@ function DualNumber(real = 0, dual = 0){
 	});
 }
 
+/**
+ * DualMatrix constructor for matrix operations with automatic differentiation
+ * @param {number} m - Number of rows
+ * @param {number} n - Number of columns
+ * @param {Float64Array|Array<number>} [dataArray] - Flattened data (row-major)
+ */
 function DualMatrix(m, n, dataArray){
 	if(!new.target){
 		return new DualMatrix(...arguments);

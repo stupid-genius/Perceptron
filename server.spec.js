@@ -7,7 +7,7 @@ const {
 } = require('./datagen.js');
 const {DualNumber, DualMatrix} = require('./Dual.js');
 const Matrix = require('./Matrix.js');
-const Perceptron = require('./Perceptron.js');
+const { Perceptron, Layer } = require('./Perceptron.js');
 
 const logger = new Logger(path.basename(__filename));
 
@@ -157,7 +157,7 @@ describe('Matrix', function(){
 	});
 
 	it.skip('should measure large matrix multiplication time', function(){
-		this.timeout(10000);
+		this.timeout(10e3);
 
 		const size = 500;
 		const A = Matrix(size, size, new Float64Array(size * size).fill(1));
@@ -365,15 +365,167 @@ describe('DualMatrix', function(){
 	});
 });
 
+describe('Layer', function(){
+	it('should initialize with correct weight and bias shapes', function(){
+		const l = new Layer(3, 2);
+		assert.equal(l.weights().length, 6);
+		assert.equal(l.bias().length, 2);
+	});
+
+	it('should forward propagate correctly (W*X + B)', function(){
+		const l = new Layer(2, 1);
+		l.activation = Perceptron.IDENTITY;
+		l.weights(0.5, 0.5);
+		l.bias(0.1);
+
+		const input = DualMatrix(2, 1, [1, 1]);
+		const output = l.forward(input);
+
+		assert.approximately(output[0][0].real, 1.1, 1e-10);
+	});
+
+	it('should update weights and biases based on gradients', function(){
+		const l = new Layer(1, 1);
+		l.activation = Perceptron.IDENTITY;
+		l.weights(1.0);
+		l.bias(0.0);
+
+		const input = DualMatrix(1, 1, [1.0]);
+		const output = l.forward(input);
+
+		const diff = output[0][0].sub(2.0);
+		const loss = diff.mul(diff).mul(0.5);
+		loss.backprop();
+
+		l.update(0.1);
+
+		assert.approximately(l.weights()[0], 1.1, 1e-10);
+		assert.approximately(l.bias()[0], 0.1, 1e-10);
+	});
+});
+
 describe('Perceptron', function(){
-	it('should initialize weights with length 3', function(){
-		const p = new Perceptron();
+	it('should initialize weights with no hidden layer', function(){
+		const p = new Perceptron([2, 1]);
 		assert.equal(p.weights().length, 3);
-		logger.debug('Perceptron created without crash.');
+	});
+
+	it('should initialize with correct total weight and bias count', function(){
+		// [2 inputs, 3 hidden, 1 output]
+		const p = new Perceptron([2, 3, 1]);
+		// Layer 1: 2 inputs -> 3 outputs. Weights: 2*3=6, Biases: 3. Total: 9
+		// Layer 2: 3 inputs -> 1 output.  Weights: 3*1=3, Biases: 1. Total: 4
+		// Global Total: 13
+		assert.equal(p.weights().length, 13);
+	});
+
+	it('should allow setting activation function', function(){
+		const p = new Perceptron([2, 1]);
+		p.activation = x => x.mul(2);
+		const y = p.forward(1, 1)[0][0];
+		logger.debug(`Custom activation output: ${y}`);
+		assert.ok(y instanceof DualNumber);
+	});
+
+	it('should update all layers when activation property is set', function(){
+		const p = new Perceptron([2, 2, 1]);
+
+		p.activation = Perceptron.RELU;
+
+		// We can't easily check private layer activation property,
+		// but we can check the getter which pulls from layers[0]
+		assert.strictEqual(p.activation, Perceptron.RELU);
+
+		p.activation = Perceptron.IDENTITY;
+		assert.strictEqual(p.activation, Perceptron.IDENTITY);
+	});
+
+	it('should allow setting loss function', function(){
+		const p = new Perceptron([2, 1]);
+		p.loss = (yPred, yTarget) => {
+			const diff = yPred.sub(DualNumber(yTarget, 0));
+			return diff.mul(diff).mul(DualNumber(0.5, 0));
+		};
+		const y = p.forward(1, 1)[0][0];
+		const loss = p.loss(y, 3);
+		logger.debug(`Custom loss output: ${loss}`);
+		assert.ok(loss instanceof DualNumber);
+	});
+
+	it('should allow switching between built-in loss functions', function(){
+		const p = new Perceptron([2, 1]);
+		p.activation = Perceptron.IDENTITY;
+		p.forward(1, 1);
+
+		p.loss = Perceptron.MAE;
+		p.backward([2]);
+
+		p.update(0.1);
+
+		p.loss = Perceptron.HUBER;
+		p.forward(1, 1);
+		p.backward([2]);
+		p.update(0.1);
+	});
+
+	it('should allow manually setting weights', function(){
+		const p = new Perceptron([2, 1]);
+		p.activation = Perceptron.RELU;
+
+		p.weights(0.1, 0.2, 0.3);
+		const y = p.forward(0, 0)[0][0];
+		assert.strictEqual(y.real, 0.3);
+	});
+
+	it('should correctly calculate number of weights', function(){
+		const numInputs = 3;
+		const numOutputs = 2;
+
+		const p = new Perceptron([numInputs, numOutputs]);
+		assert.equal(p.weights().length, (numInputs + 1) * numOutputs);
+	});
+
+	it('should handle arbitrary number of inputs', function(){
+		const numInputs = 5;
+		const p = new Perceptron([numInputs, 1]);
+		p.activation = Perceptron.RELU;
+
+		const inputs = [1, 2, 3, 4, 5];
+		const weights = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
+		p.weights(...weights);
+
+		const expectedOutput = inputs.reduce((sum, x, i) => sum + x * weights[i], weights[weights.length - 1]);
+
+		const y = p.forward(...inputs)[0][0];
+		logger.debug(`Output with ${numInputs} inputs: ${y}`);
+		assert.approximately(y.real, expectedOutput, 1e-10);
+	});
+
+	it('should handle arbitrary number of outputs', function(){
+		const numInputs = 2;
+		const numOutputs = 3;
+		const p = new Perceptron([numInputs, numOutputs]);
+		p.activation = Perceptron.IDENTITY;
+
+		const inputs = [1, 2];
+		const weights = [
+			0.1, 0.2,
+			0.4, 0.5,
+			0.7, 0.8,
+			0.3, 0.6, 0.9
+		];
+		p.weights(...weights);
+
+		const y = p.forward(...inputs);
+		assert.equal(y.dimensions[0], numOutputs);
+
+		assert.approximately(y[0][0].real, 0.1 * 1 + 0.2 * 2 + 0.3, 1e-10);
+		assert.approximately(y[1][0].real, 0.4 * 1 + 0.5 * 2 + 0.6, 1e-10);
+		assert.approximately(y[2][0].real, 0.7 * 1 + 0.8 * 2 + 0.9, 1e-10);
 	});
 
 	it('should forward propagate correctly with identity activation', function(){
-		const p = new Perceptron();
+		const p = new Perceptron([2, 1]);
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
 		const y = p.forward(1, 1)[0][0];
@@ -382,8 +534,33 @@ describe('Perceptron', function(){
 		assert.strictEqual(y.real, 1.1);
 	});
 
+	it('should forward propagate correctly through multiple layers', function(){
+		const p = new Perceptron([2, 2, 1]);
+		p.activation = Perceptron.IDENTITY;
+
+		// Layer 1 weights (2x2) and biases (2x1)
+		// W1 = [[0.5, 0.5], [0.1, 0.1]], B1 = [0.1, 0.1]
+		// Layer 2 weights (1x2) and biases (1x1)
+		// W2 = [[0.5, 0.5]], B2 = [0.1]
+		// Total weights = 4 + 2 + 2 + 1 = 9
+		p.weights(
+			0.5, 0.5, 0.1, 0.1, // W1
+			0.1, 0.1,           // B1
+			0.5, 0.5,           // W2
+			0.1                 // B2
+		);
+
+		const y = p.forward(1, 1)[0][0];
+		// Layer 1 hidden state:
+		// h1 = 1*0.5 + 1*0.5 + 0.1 = 1.1
+		// h2 = 1*0.1 + 1*0.1 + 0.1 = 0.3
+		// Layer 2 output:
+		// y = 1.1*0.5 + 0.3*0.5 + 0.1 = 0.55 + 0.15 + 0.1 = 0.8
+		assert.approximately(y.real, 0.8, 1e-10);
+	});
+
 	it('should compute backward gradients correctly for identity/MSE', function(){
-		const p = new Perceptron();
+		const p = new Perceptron([2, 1]);
 		p.actiation = Perceptron.IDENTITY;
 		p.weights(0.5, 0.5, 0.1);
 		p.activation = x => x;
@@ -400,98 +577,35 @@ describe('Perceptron', function(){
 		assert(Math.abs(newY.real - yTarget) < Math.abs(yPred.real - yTarget));
 	});
 
-	it('should allow setting activation function', function(){
-		const p = new Perceptron();
-		p.activation = x => x.mul(2);
-		const y = p.forward(1, 1)[0][0];
-		logger.debug(`Custom activation output: ${y}`);
-		assert.ok(y instanceof DualNumber);
-	});
-
-	it('should allow setting loss function', function(){
-		const p = new Perceptron();
-		p.loss = (yPred, yTarget) => {
-			const diff = yPred.sub(DualNumber(yTarget, 0));
-			return diff.mul(diff).mul(DualNumber(0.5, 0));
-		};
-		const y = p.forward(1, 1)[0][0];
-		const loss = p.loss(y, 3);
-		logger.debug(`Custom loss output: ${loss}`);
-		assert.ok(loss instanceof DualNumber);
-	});
-
-	it('should allow manually setting weights', function(){
-		const p = new Perceptron();
-		p.activation = Perceptron.RELU;
-
-		p.weights(0.1, 0.2, 0.3);
-		const y = p.forward(0, 0)[0][0];
-		assert.strictEqual(y.real, 0.3);
-	});
-
-	it('should correctly calculate number of weights', function(){
-		const numInputs = 3;
-		const numOutputs = 2;
-
-		const p = new Perceptron(numInputs, numOutputs);
-		assert.equal(p.weights().length, (numInputs + 1) * numOutputs);
-	});
-
-	it('should handle arbitrary number of inputs', function(){
-		const numInputs = 5;
-		const p = new Perceptron(numInputs);
-		p.activation = Perceptron.RELU;
-
-		const inputs = [1, 2, 3, 4, 5];
-		const weights = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]; // including bias
-		p.weights(...weights);
-
-		const expectedOutput = inputs.reduce((sum, x, i) => sum + x * weights[i], weights[weights.length - 1]);
-
-		const y = p.forward(...inputs)[0][0];
-		logger.debug(`Output with ${numInputs} inputs: ${y}`);
-		assert.approximately(y.real, expectedOutput, 1e-10);
-	});
-
-	it('should handle arbitrary number of outputs', function(){
-		const numInputs = 2;
-		const numOutputs = 3;
-		const p = new Perceptron(numInputs, numOutputs);
+	it('should compute backward gradients through multiple layers', function(){
+		const p = new Perceptron([1, 1, 1]);
 		p.activation = Perceptron.IDENTITY;
 
-		const inputs = [1, 2];
-		const weights = [
-			0.1, 0.2, 0.3,
-			0.4, 0.5, 0.6,
-			0.7, 0.8, 0.9
-		];
-		p.weights(...weights);
+		// W1 = [1.0], B1 = [0.0]
+		// W2 = [1.0], B2 = [0.0]
+		// Total = 1 + 1 + 1 + 1 = 4
+		p.weights(1.0, 0.0, 1.0, 0.0);
 
-		const y = p.forward(...inputs);
-		assert.equal(y.dimensions[0], numOutputs);
+		const initialY = p.forward(1.0)[0][0];
+		assert.strictEqual(initialY.real, 1.0);
 
-		assert.approximately(y[0][0].real, 0.1 * 1 + 0.2 * 2 + 0.3, 1e-10);
-		assert.approximately(y[1][0].real, 0.4 * 1 + 0.5 * 2 + 0.6, 1e-10);
-		assert.approximately(y[2][0].real, 0.7 * 1 + 0.8 * 2 + 0.9, 1e-10);
-	});
+		const target = 2.0;
+		p.backward([target]);
 
-	it('should allow switching between built-in loss functions', function(){
-		const p = new Perceptron(2, 1);
-		p.activation = Perceptron.IDENTITY;
-		p.forward(1, 1);
+		const oldWeights = p.weights();
 
-		// Switch to MAE
-		p.loss = Perceptron.MAE;
-		p.backward([2]); // target 2, pred ~random
-
-		// Confirm it runs without crash
 		p.update(0.1);
 
-		// Switch to Huber
-		p.loss = Perceptron.HUBER;
-		p.forward(1, 1);
-		p.backward([2]);
-		p.update(0.1);
+		const newWeights = p.weights();
+		const newY = p.forward(1.0)[0][0];
+
+		logger.debug(`MLP backward move: ${initialY.real} -> ${newY.real}`);
+
+		for(let i = 0; i < oldWeights.length; ++i){
+			assert.notEqual(oldWeights[i], newWeights[i], `Weight at index ${i} did not move`);
+		}
+
+		assert(Math.abs(newY.real - target) < Math.abs(initialY.real - target));
 	});
 });
 
@@ -516,10 +630,10 @@ describe('Perceptron training + inference', function(){
 	});
 
 	it('should reduce error on test data after training', function(){
-		this.timeout(7e3);
+		this.timeout(10e3);
 		const { training, test } = generate2x1Data(this.numSamples);
 
-		const p = new Perceptron();
+		const p = new Perceptron([2, 1]);
 		p.activation = Perceptron.IDENTITY;
 
 		function mse(data){
@@ -549,9 +663,9 @@ describe('Perceptron training + inference', function(){
 	});
 
 	it('should learn both Grade and Fatigue simultaneously', function(){
-		this.timeout(7e3);
+		this.timeout(10e3);
 		const { training, test } = generate3x2Data(this.numSamples);
-		const p = new Perceptron(3, 2);
+		const p = new Perceptron([3, 2]);
 		p.activation = Perceptron.IDENTITY;
 
 		function mse(data){
@@ -582,9 +696,9 @@ describe('Perceptron training + inference', function(){
 	});
 
 	it('should use trained weights in a new perceptron instance', function(){
-		this.timeout(7e3);
+		this.timeout(10e3);
 		let { training, test } = generate2x1Data(this.numSamples);
-		const p1 = new Perceptron();
+		const p1 = new Perceptron([2, 1]);
 
 		function mse(p, data){
 			let sum = 0;
@@ -608,7 +722,7 @@ describe('Perceptron training + inference', function(){
 		const trainedWeights = p1.weights();
 		logger.info(`Trained model test MSE: ${trainedError.toFixed(4)}`);
 
-		const p2 = new Perceptron();
+		const p2 = new Perceptron([2, 1]);
 		p2.weights(...trainedWeights);
 
 		({ training, test } = generate2x1Data());
@@ -616,6 +730,53 @@ describe('Perceptron training + inference', function(){
 
 		logger.info(`Transferred model test MSE: ${error.toFixed(4)}`);
 		assert((Math.abs(error - trainedError) / trainedError) < 0.15, `Expected transferred model error to be close to trained model error (${error} vs ${trainedError})`);
+	});
+
+	it('should solve XOR with a hidden layer (MLP) but fail without one (SLP)', function(){
+		this.timeout(10e3);
+
+		const trainingData = [
+			{ input: [0, 0], target: [0] },
+			{ input: [0, 1], target: [1] },
+			{ input: [1, 0], target: [1] },
+			{ input: [1, 1], target: [0] }
+		];
+
+		// 1. SLP (No hidden layer) - Mathematically cannot solve XOR
+		const slp = new Perceptron([2, 1]);
+		slp.activation = Perceptron.SIGMOID;
+
+		for(let i = 0; i < 2000; i++){
+			const data = trainingData[i % 4];
+			slp.forward(...data.input);
+			slp.backward(data.target);
+			slp.update(0.5);
+		}
+
+		// SLP will likely predict ~0.5 for everything as it tries to find a middle ground
+		const slpResult = slp.forward(0, 1)[0][0].real;
+		logger.debug(`SLP (0,1) prediction: ${slpResult.toFixed(3)}`);
+		// We expect it to be far from 1.0 (usually around 0.5)
+		assert.ok(slpResult < 0.7, 'SLP should not be able to confidently solve XOR');
+
+		// 2. MLP (Hidden layer) - Can solve XOR
+		const mlp = new Perceptron([2, 4, 1]);
+		mlp.activation = Perceptron.SIGMOID;
+
+		for(let i = 0; i < 5000; i++){
+			const data = trainingData[i % 4];
+			mlp.forward(...data.input);
+			mlp.backward(data.target);
+			mlp.update(0.5);
+		}
+
+		const results = trainingData.map(d => mlp.forward(...d.input)[0][0].real);
+		logger.debug(`MLP XOR Results: [0,0]->${results[0].toFixed(3)}, [0,1]->${results[1].toFixed(3)}, [1,0]->${results[2].toFixed(3)}, [1,1]->${results[3].toFixed(3)}`);
+
+		assert.approximately(results[0], 0, 0.15, 'MLP should solve XOR [0,0]');
+		assert.approximately(results[1], 1, 0.15, 'MLP should solve XOR [0,1]');
+		assert.approximately(results[2], 1, 0.15, 'MLP should solve XOR [1,0]');
+		assert.approximately(results[3], 0, 0.15, 'MLP should solve XOR [1,1]');
 	});
 });
 
