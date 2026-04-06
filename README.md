@@ -35,3 +35,4 @@ p.update(0.1);     // Apply gradients with learning rate
 
 TODO:
 - add metrics and visualization tools
+- add attention mechanism

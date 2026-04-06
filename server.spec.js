@@ -363,6 +363,15 @@ describe('DualMatrix', function(){
 		assert.equal(A.grad.data[1], 0);
 		assert.equal(scalarOut.grad, 0);
 	});
+
+	it('should propagate dual property (Forward-Mode AD) through DualMatrix', function(){
+		const A = DualMatrix(2, 2, [1, 2, 3, 4], [1, 0, 0, 1]);
+		const B = DualMatrix(2, 2, [5, 6, 7, 8], [0, 1, 1, 0]);
+		const C = A.add(B);
+		assert.deepEqual(C.dual.data, new Float64Array([1, 1, 1, 1]));
+		const D = A.multiply(B);
+		assert.deepEqual(D.dual.data, new Float64Array([7, 7, 11, 11]));
+	});
 });
 
 describe('Layer', function(){
@@ -606,6 +615,143 @@ describe('Perceptron', function(){
 		}
 
 		assert(Math.abs(newY.real - target) < Math.abs(initialY.real - target));
+	});
+});
+
+describe('Activation and Loss Functions', function(){
+	describe('Activations', function(){
+		const testCases = [
+			{ name: 'IDENTITY', act: Perceptron.IDENTITY, x: 2.0, expected: 2.0, grad: 1.0 },
+			{ name: 'STEP (pos)', act: Perceptron.STEP, x: 0.5, expected: 1.0, grad: 0.0 },
+			{ name: 'STEP (neg)', act: Perceptron.STEP, x: -0.5, expected: 0.0, grad: 0.0 },
+			{ name: 'STEP (zero)', act: Perceptron.STEP, x: 0.0, expected: 1.0, grad: 0.0 },
+			{ name: 'RELU (pos)', act: Perceptron.RELU, x: 1.0, expected: 1.0, grad: 1.0 },
+			{ name: 'RELU (neg)', act: Perceptron.RELU, x: -1.0, expected: 0.0, grad: 0.0 },
+			{ name: 'RELU (zero)', act: Perceptron.RELU, x: 0.0, expected: 0.0, grad: 0.0 },
+			{ name: 'SIGMOID (zero)', act: Perceptron.SIGMOID, x: 0.0, expected: 0.5, grad: 0.25 },
+			{
+				name: 'SIGMOID (pos)',
+				act: Perceptron.SIGMOID,
+				x: 1.0,
+				expected: 1 / (1 + Math.exp(-1)),
+				grad: (1 / (1 + Math.exp(-1))) * (1 - (1 / (1 + Math.exp(-1))))
+			},
+			{ name: 'TANH (zero)', act: Perceptron.TANH, x: 0.0, expected: 0.0, grad: 1.0 },
+			{
+				name: 'TANH (pos)',
+				act: Perceptron.TANH,
+				x: 1.0,
+				expected: Math.tanh(1),
+				grad: 1 - Math.pow(Math.tanh(1), 2)
+			}
+		];
+
+		testCases.forEach(({ name, act, x, expected, grad }) => {
+			it(`should verify ${name} forward and backward`, function(){
+				const dm = DualMatrix(1, 1, [x]);
+				const out = dm.map(act);
+				assert.approximately(out.real.data[0], expected, 1e-10);
+				out.backprop([1]);
+				assert.approximately(dm.grad.data[0], grad, 1e-10);
+			});
+		});
+
+		it('should verify SOFTMAX Jacobian', function(){
+			const x = DualMatrix(3, 1, [1, 2, 3]);
+			const y = Perceptron.SOFTMAX(x);
+			const sum = y.real.data.reduce((a, b) => a + b, 0);
+			assert.approximately(sum, 1.0, 1e-10);
+
+			const seed = [1, 0, 0];
+			y.backprop(seed);
+
+			const y0 = y.real.data[0];
+			const y1 = y.real.data[1];
+			const y2 = y.real.data[2];
+
+			assert.approximately(x.grad.data[0], y0 * (1 - y0), 1e-10);
+			assert.approximately(x.grad.data[1], -y0 * y1, 1e-10);
+			assert.approximately(x.grad.data[2], -y0 * y2, 1e-10);
+		});
+	});
+
+	describe('Loss Functions', function(){
+		const yPredArr = [0.5, 0.8];
+		const yTargetArr = [1.0, 0.0];
+
+		it('should verify MSE forward and backward', function(){
+			const yPred = DualMatrix(2, 1, yPredArr);
+			const loss = Perceptron.MSE(yPred, yTargetArr);
+			const n = yPred.dimensions[0];
+
+			const expected = yPredArr.reduce((sum, p, i) => {
+				return sum + 0.5 * Math.pow(p - yTargetArr[i], 2);
+			}, 0) / n;
+
+			assert.approximately(loss.real, expected, 1e-10);
+
+			loss.backprop();
+			// dL/dy_i = (y_i - t_i) / n
+			assert.approximately(yPred.grad.data[0], (0.5 - 1.0) / n, 1e-10);
+			assert.approximately(yPred.grad.data[1], (0.8 - 0.0) / n, 1e-10);
+		});
+
+		it('should verify MAE forward and backward', function(){
+			const yPred = DualMatrix(2, 1, yPredArr);
+			const loss = Perceptron.MAE(yPred, yTargetArr);
+			const n = yPred.dimensions[0];
+
+			const expected = yPredArr.reduce((sum, p, i) => {
+				return sum + Math.abs(p - yTargetArr[i]);
+			}, 0) / n;
+
+			assert.approximately(loss.real, expected, 1e-10);
+
+			loss.backprop();
+			// dL/dy_i = sign(y_i - t_i) / n
+			assert.approximately(yPred.grad.data[0], -1 / n, 1e-10);
+			assert.approximately(yPred.grad.data[1], 1 / n, 1e-10);
+		});
+
+		it('should verify HUBER forward and backward', function(){
+			const yPred = DualMatrix(1, 1, [0.5]);
+			const yTarget = [1.0];
+			const loss = Perceptron.HUBER(yPred, yTarget, 1.0);
+			assert.approximately(loss.real, 0.125, 1e-10);
+			loss.backprop();
+			assert.approximately(yPred.grad.data[0], -0.5, 1e-10);
+		});
+
+		it('should verify CROSS_ENTROPY forward and backward', function(){
+			const yPred = DualMatrix(1, 1, [0.5]);
+			const yTarget = [1.0];
+			const loss = Perceptron.CROSS_ENTROPY(yPred, yTarget);
+			assert.approximately(loss.real, Math.log(2), 1e-10);
+			loss.backprop();
+			assert.approximately(yPred.grad.data[0], -2.0, 1e-10);
+		});
+
+		it('should maintain numerical stability in CROSS_ENTROPY with extreme values', function(){
+			// Test exactly 0 and 1
+			const yPredZero = DualMatrix(1, 1, [0]);
+			const yPredOne = DualMatrix(1, 1, [1]);
+			const yTarget = [1];
+
+			const lossZero = Perceptron.CROSS_ENTROPY(yPredZero, yTarget);
+			assert.ok(Number.isFinite(lossZero.real), 'Loss should be finite at yPred=0');
+			lossZero.backprop();
+			assert.ok(Number.isFinite(yPredZero.grad.data[0]), 'Gradient should be finite at yPred=0');
+
+			const lossOne = Perceptron.CROSS_ENTROPY(yPredOne, yTarget);
+			assert.ok(Number.isFinite(lossOne.real), 'Loss should be finite at yPred=1');
+			lossOne.backprop();
+			assert.ok(Number.isFinite(yPredOne.grad.data[0]), 'Gradient should be finite at yPred=1');
+
+			// Test near epsilon boundary
+			const yPredNearZero = DualMatrix(1, 1, [1e-8]);
+			const lossNearZero = Perceptron.CROSS_ENTROPY(yPredNearZero, yTarget);
+			assert.ok(Number.isFinite(lossNearZero.real), 'Loss should be finite near 0');
+		});
 	});
 });
 

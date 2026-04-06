@@ -312,17 +312,21 @@ function DualNumber(real = 0, dual = 0){
  * @param {number} n - Number of columns
  * @param {Float64Array|Array<number>} [dataArray] - Flattened data (row-major)
  */
-function DualMatrix(m, n, dataArray){
+function DualMatrix(m, n, dataArray, dualArray){
 	if(!new.target){
 		return new DualMatrix(...arguments);
 	}
 
 	const real = Matrix(m, n, dataArray);
+	const dual = Matrix(m, n, dualArray);
 	const grad = Matrix(m, n); // initialized to zeros
 
 	Object.defineProperties(this, {
 		real: {
 			value: real
+		},
+		dual: {
+			value: dual
 		},
 		grad: {
 			value: grad
@@ -339,7 +343,7 @@ function DualMatrix(m, n, dataArray){
 					throw new Error('DualMatrix addition only supports DualMatrix for now');
 				}
 
-				const sum = DualMatrix(m, n, this.real.add(other.real).data);
+				const sum = DualMatrix(m, n, this.real.add(other.real).data, this.dual.add(other.dual).data);
 				sum.backward = () => {
 					// dLoss/dA = dLoss/dOut, dLoss/dB = dLoss/dOut
 					for(let i = 0; i < this.grad.data.length; ++i){
@@ -358,8 +362,10 @@ function DualMatrix(m, n, dataArray){
 					throw new Error('DualMatrix multiplication only supports DualMatrix for now');
 				}
 
+				// Forward Mode: D(AB) = (DA)B + A(DB)
 				const prodReal = this.real.multiply(other.real);
-				const prod = DualMatrix(m, other.real.dimensions[1], prodReal.data);
+				const prodDual = this.dual.multiply(other.real).add(this.real.multiply(other.dual));
+				const prod = DualMatrix(m, other.real.dimensions[1], prodReal.data, prodDual.data);
 
 				prod.backward = () => {
 					// Matrix Calculus:
@@ -383,7 +389,7 @@ function DualMatrix(m, n, dataArray){
 		},
 		transpose: {
 			value: function(){
-				const out = DualMatrix(n, m, this.real.transpose().data);
+				const out = DualMatrix(n, m, this.real.transpose().data, this.dual.transpose().data);
 				out.backward = () => {
 					const gradT = out.grad.transpose();
 					for(let i = 0; i < this.grad.data.length; ++i){
@@ -396,17 +402,38 @@ function DualMatrix(m, n, dataArray){
 		},
 		map: {
 			value: function(fn){
+				if(fn.f && fn.df){
+					const outReal = new Float64Array(m * n);
+					const outDual = new Float64Array(m * n);
+					for(let i = 0; i < m * n; i++){
+						outReal[i] = fn.f(this.real.data[i]);
+						outDual[i] = fn.df(this.real.data[i]) * this.dual.data[i];
+					}
+
+					const out = DualMatrix(m, n, outReal, outDual);
+					out.backward = () => {
+						for(let i = 0; i < m * n; i++){
+							this.grad.data[i] += fn.df(this.real.data[i]) * out.grad.data[i];
+						}
+					};
+
+					out.parents.push(this);
+					return out;
+				}
+
 				const outData = new Float64Array(m * n);
+				const outDualData = new Float64Array(m * n);
 				const innerResults = [];
 
 				for(let i = 0; i < m * n; ++i){
-					const dn = DualNumber(this.real.data[i]);
+					const dn = DualNumber(this.real.data[i], this.dual.data[i]);
 					const res = fn(dn);
 					outData[i] = res.real;
+					outDualData[i] = res.dual;
 					innerResults.push({ dn, res });
 				}
 
-				const out = DualMatrix(m, n, outData);
+				const out = DualMatrix(m, n, outData, outDualData);
 				out.backward = () => {
 					for(let i = 0; i < m * n; ++i){
 						const { dn, res } = innerResults[i];
@@ -449,12 +476,24 @@ function DualMatrix(m, n, dataArray){
 				}
 
 				if(seed instanceof Matrix){
+					if(seed.dimensions[0] !== m || seed.dimensions[1] !== n){
+						throw new Error('Seed matrix dimensions do not match matrix dimensions');
+					}
 					for(let i = 0; i < grad.data.length; ++i){
 						grad.data[i] += seed.data[i];
 					}
 				}else{
-					for(let i = 0; i < grad.data.length; ++i){
-						grad.data[i] += seed;
+					if(Array.isArray(seed) || seed instanceof Float64Array){
+						if(seed.length !== m * n){
+							throw new Error('Seed array length does not match matrix dimensions');
+						}
+						for(let i = 0; i < grad.data.length; ++i){
+							grad.data[i] += seed[i];
+						}
+					}else{
+						for(let i = 0; i < grad.data.length; ++i){
+							grad.data[i] += seed;
+						}
 					}
 				}
 
@@ -477,7 +516,7 @@ function DualMatrix(m, n, dataArray){
 								const col = Number(colProp);
 								if(!Number.isNaN(col) && col >= 0 && col < n){
 									const index = row * n + col;
-									const out = DualNumber(target.real.data[index]);
+									const out = DualNumber(target.real.data[index], target.dual.data[index]);
 									out.backward = () => {
 										target.grad.data[index] += out.grad;
 									};

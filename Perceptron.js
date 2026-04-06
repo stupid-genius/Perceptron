@@ -281,55 +281,37 @@ function Perceptron(schema = [2, 1]){
 }
 Object.defineProperties(Perceptron, {
 	IDENTITY: {
-		value: function(x){
-			return x;
-		}
+		value: { f: x => x, df: _x => 1 }
 	},
 	STEP: {
-		value: function(x){
-			const out = DualNumber(x.real >= 0 ? 1 : 0);
-			out.backward = () => {};
-			out.parents.push(x);
-			return out;
-		}
+		value: { f: x => x >= 0 ? 1 : 0, df: _x => 0 }
 	},
 	RELU: {
-		value: function(x){
-			const out = DualNumber(x.real >= 0 ? x.real : 0);
-			out.backward = () => {
-				x.grad += (x.real > 0 ? 1 : 0) * out.grad;
-			};
-			out.parents.push(x);
-			return out;
-		}
+		value: { f: x => x >= 0 ? x : 0, df: x => x > 0 ? 1 : 0 }
 	},
 	SIGMOID: {
-		value: function(x){
-			const s = 1 / (1 + Math.exp(-x.real));
-			const out = DualNumber(s);
-			out.backward = () => {
-				x.grad += s * (1 - s) * out.grad;
-			};
-			out.parents.push(x);
-			return out;
+		value: {
+			f: x => 1 / (1 + Math.exp(-x)),
+			df: x => {
+				const s = 1 / (1 + Math.exp(-x));
+				return s * (1 - s);
+			}
 		}
 	},
 	TANH: {
-		value: function(x){
-			const t = Math.tanh(x.real);
-			const out = DualNumber(t);
-			out.backward = () => {
-				x.grad += (1 - t * t) * out.grad;
-			};
-			out.parents.push(x);
-			return out;
+		value: {
+			f: x => Math.tanh(x),
+			df: x => {
+				const t = Math.tanh(x);
+				return 1 - t * t;
+			}
 		}
 	},
 	SOFTMAX: {
-		// TODO: validate this is correct
 		value: function(x){
-			const max = Math.max(...x.real);
-			const exps = x.real.map(v => Math.exp(v - max));
+			const max = Math.max(...x.real.data);
+			const exps = x.real.data.map(v => Math.exp(v - max));
+
 			const sumExps = exps.reduce((a, b) => a + b, 0);
 			const out = DualMatrix(x.dimensions[0], 1, new Float64Array(exps.map(e => e / sumExps)));
 			out.backward = () => {
@@ -360,7 +342,7 @@ Object.defineProperties(Perceptron, {
 				const diff = pred.sub(target);
 				totalLoss = totalLoss.add(diff.mul(diff).mul(0.5));
 			}
-			return totalLoss;
+			return totalLoss.div(numOutputs);
 		}
 	},
 	MAE: {
@@ -372,7 +354,7 @@ Object.defineProperties(Perceptron, {
 				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
 				totalLoss = totalLoss.add(pred.sub(target).abs());
 			}
-			return totalLoss;
+			return totalLoss.div(numOutputs);
 		}
 	},
 	HUBER: {
@@ -383,30 +365,39 @@ Object.defineProperties(Perceptron, {
 				const pred = yPred[i][0];
 				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
 				const diff = pred.sub(target);
-				const loss = diff.abs().clip(0, delta).mul(0.5).add(diff.abs().sub(delta).max(0).mul(delta));
+				const absDiff = diff.abs();
+				const quadratic = absDiff.min(delta);
+				const linear = absDiff.sub(quadratic);
+				const loss = quadratic.mul(quadratic).mul(0.5).add(linear.mul(delta));
 				totalLoss = totalLoss.add(loss);
 			}
-			return totalLoss;
+			return totalLoss.div(numOutputs);
 		}
 	},
 	CROSS_ENTROPY: {
+		/**
+		 * Binary Cross Entropy Loss
+		 * Expects yPred to be probabilities in range [0, 1] (e.g. from SIGMOID)
+		 */
 		value: (yPred, yTarget) => {
 			let totalLoss = DualNumber(0);
 			const numOutputs = yPred.dimensions[0];
 			const one = DualNumber(1, 0);
+			const epsilon = 1e-7;
 			for(let i = 0; i < numOutputs; ++i){
 				const pred = yPred[i][0];
 				const target = Array.isArray(yTarget) ? yTarget[i] : (typeof yTarget === 'number' ? yTarget : yTarget.data[i]);
 
 				const targetDN = typeof target === 'number' ? DualNumber(target) : target;
-				// Note: log(0) is -Infinity. If pred is 0 or 1, this will crash or return NaN.
-				// Maybe add a small epsilon (e.g., 1e-7) to pred to prevent this.
-				const logYPred = pred.log();
-				const logOneMinusYPred = one.sub(pred).log();
+
+				// Clamping prediction to [epsilon, 1 - epsilon] for stability
+				const safePred = pred.max(epsilon).min(1 - epsilon);
+				const logYPred = safePred.log();
+				const logOneMinusYPred = one.sub(safePred).log();
 				const loss = targetDN.mul(logYPred).add(one.sub(targetDN).mul(logOneMinusYPred)).mul(-1);
 				totalLoss = totalLoss.add(loss);
 			}
-			return totalLoss;
+			return totalLoss.div(numOutputs);
 		}
 	}
 });
