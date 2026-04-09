@@ -6,7 +6,7 @@
     "cleanlog": "rm *.log.gz *.log 2> /dev/null || :",
     "createCert": "openssl req -new -x509 -newkey rsa:4096 -keyout key.pem -nodes -out cert.pem <<END\nUS\nColorado\nBoulder\nStupid Genius Software\nlocalhost\n\n\nEND",
     "karma": "karma start",
-    "mocha": "mocha --require test.js server.spec.js tf.spec.js",
+    "mocha": "mocha --require test.js reflectron.spec.js server.spec.js tf.spec.js",
     "start": "npx http-server -S -C cert.pem -K key.pem -p 9876 -c-1",
     "test": "npm run mocha",
     "testServer": "node testServer.js"
