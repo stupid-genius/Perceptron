@@ -30,6 +30,9 @@ function Matrix(m, n, dataArray){
 	const data = new Float64Array(dataArray ?? m * n);
 
 	Object.defineProperties(this, {
+		data: {
+			value: data
+		},
 		add: {
 			value: function(matrixB){
 				if(matrixB.dimensions[0] !== m || matrixB.dimensions[1] !== n){
@@ -44,8 +47,49 @@ function Matrix(m, n, dataArray){
 				return Matrix(m, n, newArray);
 			}
 		},
-		data: {
-			value: data
+		sub: {
+			value: function(matrixB){
+				if(matrixB.dimensions[0] !== m || matrixB.dimensions[1] !== n){
+					throw new Error('Matrix subtraction dimension mismatch');
+				}
+
+				const newArray = data.slice();
+				for(let i = 0; i < newArray.length; ++i){
+					newArray[i] -= matrixB.data[i];
+				}
+
+				return Matrix(m, n, newArray);
+			}
+		},
+		multiply: {
+			value: function(matrixB){
+				if(n !== matrixB.dimensions[0]){
+					throw new Error('Matrix multiplication dimension mismatch');
+				}
+
+				const newCols = matrixB.dimensions[1];
+				const newArray = new Float64Array(m * newCols);
+				for(let i = 0; i < m; ++i){
+					for(let j = 0; j < newCols; ++j){
+						let sum = 0;
+						for(let k = 0; k < n; ++k){
+							sum += data[i * n + k] * matrixB.data[k * newCols + j];
+						}
+						newArray[i * newCols + j] = sum;
+					}
+				}
+
+				return Matrix(m, newCols, newArray);
+			}
+		},
+		scalar: {
+			value: function(scalar){
+				const scaled = data.slice();
+				for(let i = 0; i < data.length; ++i){
+					scaled[i] *= scalar;
+				}
+				return Matrix(m, n, scaled);
+			}
 		},
 		determinant: {
 			value: function(){
@@ -225,36 +269,6 @@ function Matrix(m, n, dataArray){
 				return Matrix(n, n, invData);
 			}
 		},
-		multiply: {
-			value: function(matrixB){
-				if(n !== matrixB.dimensions[0]){
-					throw new Error('Matrix multiplication dimension mismatch');
-				}
-
-				const newCols = matrixB.dimensions[1];
-				const newArray = new Float64Array(m * newCols);
-				for(let i = 0; i < m; ++i){
-					for(let j = 0; j < newCols; ++j){
-						let sum = 0;
-						for(let k = 0; k < n; ++k){
-							sum += data[i * n + k] * matrixB.data[k * newCols + j];
-						}
-						newArray[i * newCols + j] = sum;
-					}
-				}
-
-				return Matrix(m, newCols, newArray);
-			}
-		},
-		scalar: {
-			value: function(scalar){
-				const scaled = data.slice();
-				for(let i = 0; i < data.length; ++i){
-					scaled[i] *= scalar;
-				}
-				return Matrix(m, n, scaled);
-			}
-		},
 		toString: {
 			value: function(){
 				const colWidths = new Array(n).fill(0);
@@ -351,6 +365,336 @@ function Matrix(m, n, dataArray){
 
 	return indexable;
 }
+
+/**
+ * Array2D constructor
+ *
+ * Implements "array programming" version of Matrix with broadcasting and reduction.
+ *
+ * @constructor
+ * @param {number} m - number of rows
+ * @param {number} n - number of columns
+ * @param {Array|Float64Array} [dataArray] - optional flat array of length m*n to initialize data
+ */
+function Array2D(m, n, dataArray){
+	if(!new.target){
+		return new Array2D(...arguments);
+	}
+	if(!Number.isInteger(m) || m <= 0 || !Number.isInteger(n) || n <= 0){
+		throw new Error('Array2D dimensions must be positive integers');
+	}
+	if(dataArray && dataArray.length !== m * n){
+		throw new Error('Data array length does not match Array2D dimensions');
+	}
+
+	const data = new Float64Array(dataArray ?? m * n);
+
+	Object.defineProperties(this, {
+		data: {
+			value: data
+		},
+		dimensions: {
+			value: [m, n]
+		},
+		add: {
+			value: function(other){
+				const [mB, nB] = other.dimensions;
+
+				// Case 1: Standard Element-wise Addition
+				if(mB === m && nB === n){
+					const newArray = data.slice();
+					for(let i = 0; i < newArray.length; ++i){
+						newArray[i] += other.data[i];
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				// Case 2: Column-Vector Broadcasting (m x 1 added to m x n)
+				if(mB === m && nB === 1){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = data[i * n + j] + other.data[i];
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				// Case 3: Row-Vector Broadcasting (1 x n added to m x n)
+				if(mB === 1 && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = data[i * n + j] + other.data[j];
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				throw new Error(`Array2D addition dimension mismatch: (${m}x${n}) + (${mB}x${nB})`);
+			}
+		},
+		sub: {
+			value: function(other){
+				const [mB, nB] = other.dimensions;
+
+				if(mB === m && nB === n){
+					const newArray = data.slice();
+					for(let i = 0; i < newArray.length; ++i){
+						newArray[i] -= other.data[i];
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === m && nB === 1){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = data[i * n + j] - other.data[i];
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === 1 && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = data[i * n + j] - other.data[j];
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				throw new Error(`Array2D subtraction dimension mismatch: (${m}x${n}) - (${mB}x${nB})`);
+			}
+		},
+		multiply: {
+			value: function(other){
+				if(n !== other.dimensions[0]){
+					throw new Error('Array2D multiplication dimension mismatch');
+				}
+
+				const newCols = other.dimensions[1];
+				const newArray = new Float64Array(m * newCols);
+				for(let i = 0; i < m; ++i){
+					for(let j = 0; j < newCols; ++j){
+						let sum = 0;
+						for(let k = 0; k < n; ++k){
+							sum += data[i * n + k] * other.data[k * newCols + j];
+						}
+						newArray[i * newCols + j] = sum;
+					}
+				}
+
+				return Array2D(m, newCols, newArray);
+			}
+		},
+		scalar: {
+			value: function(scalar){
+				const scaled = data.slice();
+				for(let i = 0; i < data.length; ++i){
+					scaled[i] *= scalar;
+				}
+				return Array2D(m, n, scaled);
+			}
+		},
+		sum: {
+			value: function(axis){
+				if(axis === 0){
+					// Column sum -> Row vector (1 x n)
+					const result = new Float64Array(n);
+					for(let j = 0; j < n; j++){
+						for(let i = 0; i < m; i++){
+							result[j] += data[i * n + j];
+						}
+					}
+					return Array2D(1, n, result);
+				}
+				if(axis === 1){
+					// Row sum -> Column vector (m x 1)
+					const result = new Float64Array(m);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							result[i] += data[i * n + j];
+						}
+					}
+					return Array2D(m, 1, result);
+				}
+				// Global sum -> Scalar (1 x 1)
+				let total = 0;
+				for(let i = 0; i < data.length; i++){
+					total += data[i];
+				}
+				return Array2D(1, 1, [total]);
+			}
+		},
+		max: {
+			value: function(other){
+				const [mB, nB] = other.dimensions;
+
+				if(mB === m && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < newArray.length; ++i){
+						newArray[i] = Math.max(data[i], other.data[i]);
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === m && nB === 1){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = Math.max(data[i * n + j], other.data[i]);
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === 1 && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = Math.max(data[i * n + j], other.data[j]);
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				throw new Error(`Array2D max dimension mismatch: (${m}x${n}) vs (${mB}x${nB})`);
+			}
+		},
+		min: {
+			value: function(other){
+				const [mB, nB] = other.dimensions;
+
+				if(mB === m && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < newArray.length; ++i){
+						newArray[i] = Math.min(data[i], other.data[i]);
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === m && nB === 1){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = Math.min(data[i * n + j], other.data[i]);
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				if(mB === 1 && nB === n){
+					const newArray = new Float64Array(m * n);
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							newArray[i * n + j] = Math.min(data[i * n + j], other.data[j]);
+						}
+					}
+					return Array2D(m, n, newArray);
+				}
+
+				throw new Error(`Array2D min dimension mismatch: (${m}x${n}) vs (${mB}x${nB})`);
+			}
+		},
+		transpose: {
+			value: function(){
+				const transposedArray = new Float64Array(n * m);
+				for(let i = 0; i < m; ++i){
+					for(let j = 0; j < n; ++j){
+						transposedArray[j * m + i] = data[i * n + j];
+					}
+				}
+
+				return Array2D(n, m, transposedArray);
+			}
+		},
+		toString: {
+			value: function(){
+				const colWidths = new Array(n).fill(0);
+				for(let j = 0; j < n; j++){
+					for(let i = 0; i < m; i++){
+						const str = data[i * n + j].toFixed(2);
+						colWidths[j] = Math.max(colWidths[j], str.length);
+					}
+				}
+
+				let result = '';
+				for(let i = 0; i < m; i++){
+					let left, right;
+					if(m === 1){
+						left = '[ ';
+						right = ' ]';
+					}else if(i === 0){
+						left = '┌ ';
+						right = ' ┐';
+					}else if(i === m - 1){
+						left = '└ ';
+						right = ' ┘';
+					}else{
+						left = '│ ';
+						right = ' │';
+					}
+
+					let rowStr = left;
+					for(let j = 0; j < n; j++){
+						const val = data[i * n + j].toFixed(2);
+						rowStr += val.padStart(colWidths[j]) + (j === n - 1 ? '' : '  ');
+					}
+					result += rowStr + right + (i === m - 1 ? '' : '\n');
+				}
+				return result;
+			}
+		}
+	});
+
+	// allow 2D indexing, ie. array[i][j]
+	const indexable = new Proxy(this, {
+		get(target, prop, receiver){
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					return new Proxy({}, {
+						get(_, colProp){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									return data[row * n + col];
+								}
+							}
+							return undefined;
+						},
+						set(_, colProp, value){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									data[row * n + col] = value;
+									return true;
+								}
+							}
+							return false;
+						}
+					});
+				}
+			}
+			return Reflect.get(target, prop, receiver);
+		},
+		set(target, prop, value, receiver){
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					throw new Error('Use array[row][col] to set individual elements.');
+				}
+			}
+			return Reflect.set(target, prop, value, receiver);
+		}
+	});
+
+	return indexable;
+}
+
 Object.defineProperties(Matrix, {
 	identity: {
 		value: function(size){
@@ -363,4 +707,7 @@ Object.defineProperties(Matrix, {
 	}
 });
 
-module.exports = Matrix;
+module.exports = {
+	Matrix,
+	Array2D
+};

@@ -1,6 +1,6 @@
 const Logger = require('log-ng');
 const path = require('node:path');
-const Matrix = require('./Matrix.js');
+const { Matrix, Array2D } = require('./Matrix.js');
 
 const logger = new Logger(path.basename(__filename));
 
@@ -343,17 +343,82 @@ function DualMatrix(m, n, dataArray, dualArray){
 					throw new Error('DualMatrix addition only supports DualMatrix for now');
 				}
 
-				const sum = DualMatrix(m, n, this.real.add(other.real).data, this.dual.add(other.dual).data);
+				const sumReal = this.real.add(other.real);
+				const sumDual = this.dual.add(other.dual);
+				const sum = DualMatrix(sumReal.dimensions[0], sumReal.dimensions[1], sumReal.data, sumDual.data);
+
 				sum.backward = () => {
-					// dLoss/dA = dLoss/dOut, dLoss/dB = dLoss/dOut
+					const [mO, nO] = other.dimensions;
+
+					// Gradient for 'this' (Always the same dimension as result in our broadcast rules)
 					for(let i = 0; i < this.grad.data.length; ++i){
 						this.grad.data[i] += sum.grad.data[i];
-						other.grad.data[i] += sum.grad.data[i];
+					}
+
+					// Gradient for 'other' (Handles broadcasting reduction)
+					if(mO === m && nO === n){
+						for(let i = 0; i < other.grad.data.length; ++i){
+							other.grad.data[i] += sum.grad.data[i];
+						}
+					}else if(mO === m && nO === 1){
+						// Column broadcasting: sum gradients across all columns
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[i] += sum.grad.data[i * n + j];
+							}
+						}
+					}else if(mO === 1 && nO === n){
+						// Row broadcasting: sum gradients across all rows
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[j] += sum.grad.data[i * n + j];
+							}
+						}
 					}
 				};
 
 				sum.parents.push(this, other);
 				return sum;
+			}
+		},
+		sub: {
+			value: function(other){
+				if(!(other instanceof DualMatrix)){
+					throw new Error('DualMatrix subtraction only supports DualMatrix for now');
+				}
+
+				const diffReal = this.real.sub(other.real);
+				const diffDual = this.dual.sub(other.dual);
+				const diff = DualMatrix(diffReal.dimensions[0], diffReal.dimensions[1], diffReal.data, diffDual.data);
+
+				diff.backward = () => {
+					const [mO, nO] = other.dimensions;
+
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += diff.grad.data[i];
+					}
+
+					if(mO === m && nO === n){
+						for(let i = 0; i < other.grad.data.length; ++i){
+							other.grad.data[i] -= diff.grad.data[i];
+						}
+					}else if(mO === m && nO === 1){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[i] -= diff.grad.data[i * n + j];
+							}
+						}
+					}else if(mO === 1 && nO === n){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[j] -= diff.grad.data[i * n + j];
+							}
+						}
+					}
+				};
+
+				diff.parents.push(this, other);
+				return diff;
 			}
 		},
 		multiply: {
@@ -536,8 +601,410 @@ function DualMatrix(m, n, dataArray, dualArray){
 	return indexable;
 }
 
+/**
+ * DualArray constructor for array programming operations with automatic differentiation
+ * @param {number} m - Number of rows
+ * @param {number} n - Number of columns
+ * @param {Float64Array|Array<number>} [dataArray] - Flattened data (row-major)
+ * @param {Float64Array|Array<number>} [dualArray] - Flattened dual data
+ */
+function DualArray(m, n, dataArray, dualArray){
+	if(!new.target){
+		return new DualArray(...arguments);
+	}
+
+	const real = Array2D(m, n, dataArray);
+	const dual = Array2D(m, n, dualArray);
+	const grad = Array2D(m, n); // initialized to zeros
+
+	Object.defineProperties(this, {
+		real: {
+			value: real
+		},
+		dual: {
+			value: dual
+		},
+		grad: {
+			value: grad
+		},
+		parents: {
+			value: []
+		},
+		dimensions: {
+			get: () => [m, n]
+		},
+		add: {
+			value: function(other){
+				if(!(other instanceof DualArray)){
+					throw new Error('DualArray addition only supports DualArray for now');
+				}
+
+				const sumReal = this.real.add(other.real);
+				const sumDual = this.dual.add(other.dual);
+				const sum = DualArray(sumReal.dimensions[0], sumReal.dimensions[1], sumReal.data, sumDual.data);
+
+				sum.backward = () => {
+					const [mO, nO] = other.dimensions;
+
+					// Gradient for 'this'
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += sum.grad.data[i];
+					}
+
+					// Gradient for 'other' (Handles broadcasting reduction)
+					if(mO === m && nO === n){
+						for(let i = 0; i < other.grad.data.length; ++i){
+							other.grad.data[i] += sum.grad.data[i];
+						}
+					}else if(mO === m && nO === 1){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[i] += sum.grad.data[i * n + j];
+							}
+						}
+					}else if(mO === 1 && nO === n){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[j] += sum.grad.data[i * n + j];
+							}
+						}
+					}
+				};
+
+				sum.parents.push(this, other);
+				return sum;
+			}
+		},
+		sub: {
+			value: function(other){
+				if(!(other instanceof DualArray)){
+					throw new Error('DualArray subtraction only supports DualArray for now');
+				}
+
+				const diffReal = this.real.sub(other.real);
+				const diffDual = this.dual.sub(other.dual);
+				const diff = DualArray(diffReal.dimensions[0], diffReal.dimensions[1], diffReal.data, diffDual.data);
+
+				diff.backward = () => {
+					const [mO, nO] = other.dimensions;
+
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += diff.grad.data[i];
+					}
+
+					if(mO === m && nO === n){
+						for(let i = 0; i < other.grad.data.length; ++i){
+							other.grad.data[i] -= diff.grad.data[i];
+						}
+					}else if(mO === m && nO === 1){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[i] -= diff.grad.data[i * n + j];
+							}
+						}
+					}else if(mO === 1 && nO === n){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								other.grad.data[j] -= diff.grad.data[i * n + j];
+							}
+						}
+					}
+				};
+
+				diff.parents.push(this, other);
+				return diff;
+			}
+		},
+		multiply: {
+			value: function(other){
+				if(!(other instanceof DualArray)){
+					throw new Error('DualArray multiplication only supports DualArray for now');
+				}
+
+				const prodReal = this.real.multiply(other.real);
+				const prodDual = this.dual.multiply(other.real).add(this.real.multiply(other.dual));
+				const prod = DualArray(m, other.real.dimensions[1], prodReal.data, prodDual.data);
+
+				prod.backward = () => {
+					const gradA = prod.grad.multiply(other.real.transpose());
+					const gradB = this.real.transpose().multiply(prod.grad);
+
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += gradA.data[i];
+					}
+					for(let i = 0; i < other.grad.data.length; ++i){
+						other.grad.data[i] += gradB.data[i];
+					}
+				};
+
+				prod.parents.push(this, other);
+				return prod;
+			}
+		},
+		transpose: {
+			value: function(){
+				const out = DualArray(n, m, this.real.transpose().data, this.dual.transpose().data);
+				out.backward = () => {
+					const gradT = out.grad.transpose();
+					for(let i = 0; i < this.grad.data.length; ++i){
+						this.grad.data[i] += gradT.data[i];
+					}
+				};
+				out.parents.push(this);
+				return out;
+			}
+		},
+		max: {
+			value: function(other){
+				if(!(other instanceof DualArray)){
+					throw new Error('DualArray max only supports DualArray for now');
+				}
+
+				const outReal = this.real.max(other.real);
+				const outDual = new Float64Array(m * n);
+				for(let i = 0; i < m * n; i++){
+					// Simple forward AD for max: D(max(a, b)) = (a > b) ? Da : Db
+					// Note: Array2D.max handles broadcasting in its forward pass
+				}
+				// Correct forward dual:
+				const [mO, nO] = other.dimensions;
+				for(let i = 0; i < m; i++){
+					for(let j = 0; j < n; j++){
+						const idx = i * n + j;
+						const idxO = (mO === 1 ? 0 : i) * nO + (nO === 1 ? 0 : j);
+						outDual[idx] = this.real.data[idx] > other.real.data[idxO] ? this.dual.data[idx] : other.dual.data[idxO];
+					}
+				}
+
+				const out = DualArray(m, n, outReal.data, outDual);
+				out.backward = () => {
+					const [mO, nO] = other.dimensions;
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							const idx = i * n + j;
+							const idxO = (mO === 1 ? 0 : i) * nO + (nO === 1 ? 0 : j);
+							if(this.real.data[idx] > other.real.data[idxO]){
+								this.grad.data[idx] += out.grad.data[idx];
+							}else if(other.real.data[idxO] > this.real.data[idx]){
+								other.grad.data[idxO] += out.grad.data[idx];
+							}else{
+								this.grad.data[idx] += out.grad.data[idx] * 0.5;
+								other.grad.data[idxO] += out.grad.data[idx] * 0.5;
+							}
+						}
+					}
+				};
+
+				out.parents.push(this, other);
+				return out;
+			}
+		},
+		min: {
+			value: function(other){
+				if(!(other instanceof DualArray)){
+					throw new Error('DualArray min only supports DualArray for now');
+				}
+
+				const outReal = this.real.min(other.real);
+				const outDual = new Float64Array(m * n);
+				const [mO, nO] = other.dimensions;
+				for(let i = 0; i < m; i++){
+					for(let j = 0; j < n; j++){
+						const idx = i * n + j;
+						const idxO = (mO === 1 ? 0 : i) * nO + (nO === 1 ? 0 : j);
+						outDual[idx] = this.real.data[idx] < other.real.data[idxO] ? this.dual.data[idx] : other.dual.data[idxO];
+					}
+				}
+
+				const out = DualArray(m, n, outReal.data, outDual);
+				out.backward = () => {
+					const [mO, nO] = other.dimensions;
+					for(let i = 0; i < m; i++){
+						for(let j = 0; j < n; j++){
+							const idx = i * n + j;
+							const idxO = (mO === 1 ? 0 : i) * nO + (nO === 1 ? 0 : j);
+							if(this.real.data[idx] < other.real.data[idxO]){
+								this.grad.data[idx] += out.grad.data[idx];
+							}else if(other.real.data[idxO] < this.real.data[idx]){
+								other.grad.data[idxO] += out.grad.data[idx];
+							}else{
+								this.grad.data[idx] += out.grad.data[idx] * 0.5;
+								other.grad.data[idxO] += out.grad.data[idx] * 0.5;
+							}
+						}
+					}
+				};
+
+				out.parents.push(this, other);
+				return out;
+			}
+		},
+		sum: {
+			value: function(axis){
+				const sumReal = this.real.sum(axis);
+				const sumDual = this.dual.sum(axis);
+				const sum = DualArray(sumReal.dimensions[0], sumReal.dimensions[1], sumReal.data, sumDual.data);
+
+				sum.backward = () => {
+					if(axis === 0){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								this.grad.data[i * n + j] += sum.grad.data[j];
+							}
+						}
+					}else if(axis === 1){
+						for(let i = 0; i < m; i++){
+							for(let j = 0; j < n; j++){
+								this.grad.data[i * n + j] += sum.grad.data[i];
+							}
+						}
+					}else{
+						const g = sum.grad.data[0];
+						for(let i = 0; i < m * n; i++){
+							this.grad.data[i] += g;
+						}
+					}
+				};
+
+				sum.parents.push(this);
+				return sum;
+			}
+		},
+		map: {
+			value: function(fn){
+				if(fn.f && fn.df){
+					const outReal = new Float64Array(m * n);
+					const outDual = new Float64Array(m * n);
+					for(let i = 0; i < m * n; i++){
+						outReal[i] = fn.f(this.real.data[i]);
+						outDual[i] = fn.df(this.real.data[i]) * this.dual.data[i];
+					}
+
+					const out = DualArray(m, n, outReal, outDual);
+					out.backward = () => {
+						for(let i = 0; i < m * n; i++){
+							this.grad.data[i] += fn.df(this.real.data[i]) * out.grad.data[i];
+						}
+					};
+
+					out.parents.push(this);
+					return out;
+				}
+
+				const outData = new Float64Array(m * n);
+				const outDualData = new Float64Array(m * n);
+				const innerResults = [];
+
+				for(let i = 0; i < m * n; ++i){
+					const dn = DualNumber(this.real.data[i], this.dual.data[i]);
+					const res = fn(dn);
+					outData[i] = res.real;
+					outDualData[i] = res.dual;
+					innerResults.push({ dn, res });
+				}
+
+				const out = DualArray(m, n, outData, outDualData);
+				out.backward = () => {
+					for(let i = 0; i < m * n; ++i){
+						const { dn, res } = innerResults[i];
+						res.backprop(out.grad.data[i]);
+						this.grad.data[i] += dn.grad;
+					}
+				};
+
+				out.parents.push(this);
+				return out;
+			}
+		},
+		toString: {
+			value: function(){
+				return `DualArray(${m}x${n}):\nReal:\n${this.real.toString()}\nGrad:\n${this.grad.toString()}`;
+			}
+		},
+		zeroGrads: {
+			value: function(){
+				traverse(this, new Set(), (node) => {
+					if(node.grad instanceof Matrix || node.grad instanceof Array2D){
+						node.grad.data.fill(0);
+					}else{
+						node.grad = 0;
+					}
+				});
+			}
+		},
+		backprop: {
+			value: function(seed){
+				const topo = [];
+				traverse(this, new Set(), (node) => {
+					topo.push(node);
+				});
+
+				if(!seed){
+					seed = Array2D(m, n, new Float64Array(m * n).fill(1));
+				}
+
+				if(seed instanceof Matrix || seed instanceof Array2D){
+					if(seed.dimensions[0] !== m || seed.dimensions[1] !== n){
+						throw new Error('Seed dimensions do not match dimensions');
+					}
+					for(let i = 0; i < grad.data.length; ++i){
+						grad.data[i] += seed.data[i];
+					}
+				}else if(Array.isArray(seed) || seed instanceof Float64Array){
+					if(seed.length !== m * n){
+						throw new Error('Seed array length does not match dimensions');
+					}
+					for(let i = 0; i < grad.data.length; ++i){
+						grad.data[i] += seed[i];
+					}
+				}else{
+					for(let i = 0; i < grad.data.length; ++i){
+						grad.data[i] += seed;
+					}
+				}
+
+				for(let i = topo.length - 1; i >= 0; --i){
+					const node = topo[i];
+					node.backward?.();
+				}
+			}
+		}
+	});
+
+	const indexable = new Proxy(this, {
+		get(target, prop, receiver){
+			if(typeof prop === 'string'){
+				const row = Number(prop);
+				if(!Number.isNaN(row) && row >= 0 && row < m){
+					return new Proxy({}, {
+						get(_, colProp){
+							if(typeof colProp === 'string'){
+								const col = Number(colProp);
+								if(!Number.isNaN(col) && col >= 0 && col < n){
+									const index = row * n + col;
+									const out = DualNumber(target.real.data[index], target.dual.data[index]);
+									out.backward = () => {
+										target.grad.data[index] += out.grad;
+									};
+									out.parents.push(target);
+									return out;
+								}
+							}
+							return undefined;
+						}
+					});
+				}
+			}
+			return Reflect.get(target, prop, receiver);
+		}
+	});
+
+	return indexable;
+}
+
 module.exports = {
 	DualNumber,
-	DualMatrix
+	DualMatrix,
+	DualArray
 };
 

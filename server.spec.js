@@ -5,8 +5,12 @@ const {
 	generate2x1Data,
 	generate3x2Data,
 } = require('./datagen.js');
-const {DualNumber, DualMatrix} = require('./Dual.js');
-const Matrix = require('./Matrix.js');
+const {
+	DualArray,
+	DualMatrix,
+	DualNumber
+} = require('./Dual.js');
+const {Matrix, Array2D} = require('./Matrix.js');
 const { Perceptron, Layer } = require('./Perceptron.js');
 
 const logger = new Logger(path.basename(__filename));
@@ -29,6 +33,12 @@ describe('Matrix', function(){
 		const C = A.add(B);
 
 		assert.deepEqual(C.data, new Float64Array([6, 8, 10, 12]));
+	});
+
+	it('should throw on dimension mismatch for add (no broadcasting)', function(){
+		const A = Matrix(2, 2, [1, 2, 3, 4]);
+		const B = Matrix(2, 1, [10, 20]);
+		assert.throws(() => A.add(B), /dimension mismatch/);
 	});
 
 	it('should multiply two matrices', function(){
@@ -116,7 +126,7 @@ describe('Matrix', function(){
 		assert.throws(() => nonSquare.inverse(), /only defined for square/);
 	});
 
-	it('should provide a fancy string representation via toString', function(){
+	it('should provide a formatted string representation via toString', function(){
 		const A = Matrix(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 		const strA = A.toString();
 		logger.info(`Fancy 3x3 matrix:\n${strA}`);
@@ -173,6 +183,119 @@ describe('Matrix', function(){
 		assert.equal(C.dimensions[0], size);
 		assert.equal(C.dimensions[1], size);
 		assert.equal(C[0][0], size);
+	});
+});
+
+describe('Array2D', function(){
+	it('should support 2D indexing and mutation', function(){
+		const A = Array2D(2, 3);
+		assert.equal(A[0][0], 0);
+		assert.equal(A[1][2], 0);
+
+		A[0][1] = 5;
+		A[1][0] = -3;
+		assert.equal(A[0][1], 5);
+		assert.equal(A[1][0], -3);
+	});
+
+	it('should support broadcasting in addition', function(){
+		const A = Array2D(2, 3, [1, 2, 3, 4, 5, 6]);
+
+		// Column vector broadcasting (2x1)
+		const col = Array2D(2, 1, [10, 20]);
+		const B = A.add(col);
+		assert.deepEqual(B.data, new Float64Array([11, 12, 13, 24, 25, 26]));
+
+		// Row vector broadcasting (1x3)
+		const row = Array2D(1, 3, [100, 200, 300]);
+		const C = A.add(row);
+		assert.deepEqual(C.data, new Float64Array([101, 202, 303, 104, 205, 306]));
+	});
+
+	it('should support broadcasting in subtraction', function(){
+		const A = Array2D(2, 2, [10, 20, 30, 40]);
+		const col = Array2D(2, 1, [1, 2]);
+		const B = A.sub(col);
+		assert.deepEqual(B.data, new Float64Array([9, 19, 28, 38]));
+	});
+
+	it('should support broadcasting in min and max', function(){
+		const A = Array2D(2, 2, [10, 5, 2, 20]);
+		const threshold = Array2D(2, 1, [8, 15]);
+
+		const high = A.max(threshold);
+		assert.deepEqual(high.data, new Float64Array([10, 8, 15, 20]));
+
+		const low = A.min(threshold);
+		assert.deepEqual(low.data, new Float64Array([8, 5, 2, 15]));
+	});
+
+	it('should multiply two arrays', function(){
+		const A = Array2D(2, 3, new Float64Array([1, 2, 3, 4, 5, 6]));
+		const B = Array2D(3, 2, new Float64Array([7, 8, 9, 10, 11, 12]));
+		const C = A.multiply(B);
+
+		assert.deepEqual(C.data, new Float64Array([58, 64, 139, 154]));
+	});
+
+	it('should scale an array by a scalar', function(){
+		const A = Array2D(2, 2, new Float64Array([1, 2, 3, 4]));
+		const B = A.scalar(2);
+
+		assert.deepEqual(B.data, new Float64Array([2, 4, 6, 8]));
+	});
+
+	it('should transpose an array', function(){
+		const A = Array2D(2, 3, new Float64Array([1, 2, 3, 4, 5, 6]));
+		const B = A.transpose();
+
+		assert.deepEqual(B.data, new Float64Array([1, 4, 2, 5, 3, 6]));
+		assert.deepEqual(B.dimensions, [3, 2]);
+	});
+
+	it('should support sum reduction', function(){
+		const A = Array2D(2, 3, [1, 2, 3, 4, 5, 6]);
+
+		// Column sum (axis 0) -> 1x3 result
+		const colSum = A.sum(0);
+		assert.deepEqual(colSum.data, new Float64Array([5, 7, 9]));
+
+		// Row sum (axis 1) -> 2x1 result
+		const rowSum = A.sum(1);
+		assert.deepEqual(rowSum.data, new Float64Array([6, 15]));
+
+		// Global sum -> 1x1 result
+		const totalSum = A.sum();
+		assert.deepEqual(totalSum.data, new Float64Array([21]));
+	});
+
+	it('should provide a formatted string representation via toString', function(){
+		const A = Array2D(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+		const strA = A.toString();
+		assert.ok(strA.includes('┌ 1.00  2.00  3.00 ┐'));
+		assert.ok(strA.includes('│ 4.00  5.00  6.00 │'));
+		assert.ok(strA.includes('└ 7.00  8.00  9.00 ┘'));
+	});
+
+	it('should throw on dimension mismatch for add (no valid broadcast)', function(){
+		const A = Array2D(2, 2);
+		const B = Array2D(3, 2);
+
+		assert.throws(() => A.add(B), /dimension mismatch/);
+	});
+
+	it('should throw on dimension mismatch for multiply', function(){
+		const A = Array2D(2, 2);
+		const B = Array2D(3, 3);
+
+		assert.throws(() => A.multiply(B), /dimension mismatch/);
+	});
+
+	it('should handle 1x1 array arithmetic', function(){
+		const A = Array2D(1, 1, [5]);
+		const B = Array2D(1, 1, [10]);
+		assert.equal(A.add(B)[0][0], 15);
+		assert.equal(A.multiply(B)[0][0], 50);
 	});
 });
 
@@ -371,6 +494,103 @@ describe('DualMatrix', function(){
 		assert.deepEqual(C.dual.data, new Float64Array([1, 1, 1, 1]));
 		const D = A.multiply(B);
 		assert.deepEqual(D.dual.data, new Float64Array([7, 7, 11, 11]));
+	});
+});
+
+describe('DualArray', function(){
+	it('should support broadcasting in addition (forward and backward)', function(){
+		const A = DualArray(2, 3, [1, 2, 3, 4, 5, 6]);
+		const col = DualArray(2, 1, [10, 20]);
+
+		const sum = A.add(col);
+		assert.deepEqual(sum.real.data, new Float64Array([11, 12, 13, 24, 25, 26]));
+
+		sum.backprop();
+
+		// Gradient for A should be all ones
+		assert.deepEqual(A.grad.data, new Float64Array([1, 1, 1, 1, 1, 1]));
+
+		// Gradient for col (2x1) should be the sum of gradients across each row of the output
+		assert.deepEqual(col.grad.data, new Float64Array([3, 3]));
+	});
+
+	it('should support broadcasting in subtraction (forward and backward)', function(){
+		const A = DualArray(2, 2, [10, 20, 30, 40]);
+		const col = DualArray(2, 1, [1, 2]);
+
+		const diff = A.sub(col);
+		assert.deepEqual(diff.real.data, new Float64Array([9, 19, 28, 38]));
+
+		diff.backprop();
+
+		// Gradient for A should be all ones
+		assert.deepEqual(A.grad.data, new Float64Array([1, 1, 1, 1]));
+
+		// Gradient for col (2x1) should be -sum of gradients across each row
+		assert.deepEqual(col.grad.data, new Float64Array([-2, -2]));
+	});
+
+	it('should support broadcasting in min and max (forward and backward)', function(){
+		const A = DualArray(2, 2, [10, 5, 2, 20]);
+		const threshold = DualArray(2, 1, [8, 15]);
+
+		// Max test
+		const high = A.max(threshold);
+		assert.deepEqual(high.real.data, new Float64Array([10, 8, 15, 20]));
+
+		high.backprop();
+		// Indices where A > threshold: [0, 0] (10 > 8), [1, 1] (20 > 15)
+		// Indices where threshold > A: [0, 1] (8 > 5), [1, 0] (15 > 2)
+		assert.deepEqual(A.grad.data, new Float64Array([1, 0, 0, 1]));
+		assert.deepEqual(threshold.grad.data, new Float64Array([1, 1]));
+
+		A.zeroGrads();
+		threshold.zeroGrads();
+
+		// Min test
+		const low = A.min(threshold);
+		assert.deepEqual(low.real.data, new Float64Array([8, 5, 2, 15]));
+
+		low.backprop();
+		// Indices where A < threshold: [0, 1] (5 < 8), [1, 0] (2 < 15)
+		// Indices where threshold < A: [0, 0] (8 < 10), [1, 1] (15 < 20)
+		assert.deepEqual(A.grad.data, new Float64Array([0, 1, 1, 0]));
+		assert.deepEqual(threshold.grad.data, new Float64Array([1, 1]));
+	});
+
+	it('should handle ties in min and max by splitting gradients', function(){
+		const A = DualArray(1, 2, [10, 10]);
+		const B = DualArray(1, 2, [10, 5]);
+
+		const res = A.max(B);
+		res.backprop();
+
+		// At index 0, A[0]==B[0]==10, so gradient should be 0.5 each
+		assert.equal(A.grad.data[0], 0.5);
+		assert.equal(B.grad.data[0], 0.5);
+
+		// At index 1, A[1]==10 > B[1]==5, so A gets full gradient
+		assert.equal(A.grad.data[1], 1.0);
+		assert.equal(B.grad.data[1], 0.0);
+	});
+
+	it('should support sum reduction (forward and backward)', function(){
+		const A = DualArray(2, 3, [1, 2, 3, 4, 5, 6]);
+
+		// Row sum (axis 1) -> 2x1 result
+		const rowSum = A.sum(1);
+		assert.deepEqual(rowSum.real.data, new Float64Array([6, 15]));
+
+		rowSum.backprop();
+		assert.deepEqual(A.grad.data, new Float64Array([1, 1, 1, 1, 1, 1]));
+	});
+
+	it('should provide a string representation via toString', function(){
+		const A = DualArray(1, 1, [5]);
+		const str = A.toString();
+		assert.ok(str.includes('DualArray(1x1)'));
+		assert.ok(str.includes('Real:'));
+		assert.ok(str.includes('5'));
 	});
 });
 

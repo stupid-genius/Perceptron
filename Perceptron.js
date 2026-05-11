@@ -172,7 +172,6 @@ function Perceptron(schema = [2, 1]){
 		 * @returns {DualMatrix} The output column vector (numOutputs x 1)
 		 */
 		forward: {
-
 			value: function(...args){
 				const inputData = new Float64Array(schema[0]);
 				for(let i = 0; i < schema[0]; ++i){
